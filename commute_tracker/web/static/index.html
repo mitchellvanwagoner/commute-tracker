@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Commute Tracker</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#128663;</text></svg>">
+</head>
+<body>
+  <div class="viz-root">
+    <header class="topbar">
+      <div>
+        <h1>Commute Tracker</h1>
+        <p class="route-line" id="route-line">Loading&hellip;</p>
+      </div>
+      <div class="controls">
+        <label class="field">
+          <span>Route</span>
+          <select id="route-select"></select>
+        </label>
+        <label class="field">
+          <span>Range</span>
+          <select id="range-select">
+            <option value="7">Last 7 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="">All time</option>
+          </select>
+        </label>
+        <a class="button" id="csv-link" href="/api/samples.csv">Export CSV</a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero card" id="hero">
+        <div class="hero-figure">
+          <p class="label">Average commute</p>
+          <p class="value" id="hero-value">&mdash;</p>
+          <p class="sub" id="hero-sub"></p>
+        </div>
+        <div class="tiles" id="tiles"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Daily commute range</h2>
+          <p class="sub">Shaded band is each day&rsquo;s fastest&ndash;slowest trip; the line is that day&rsquo;s average.</p>
+        </div>
+        <figure class="chart" id="chart-daily"></figure>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Time-of-day profile</h2>
+          <p class="sub">Every sample time in the tracked window, aggregated across all days.</p>
+        </div>
+        <figure class="chart" id="chart-tod"></figure>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Average by weekday</h2>
+          <p class="sub">Which day of the week costs you the most time.</p>
+        </div>
+        <figure class="chart" id="chart-weekday"></figure>
+      </section>
+
+      <section class="card">
+        <div class="card-head row">
+          <h2>Daily table</h2>
+          <button class="button ghost" id="table-toggle" aria-expanded="false">Show table</button>
+        </div>
+        <div id="table-wrap" hidden></div>
+      </section>
+
+      <section class="card" id="failures-card" hidden>
+        <div class="card-head">
+          <h2>Recent failed lookups</h2>
+          <p class="sub">Gaps in the charts above line up with these.</p>
+        </div>
+        <div id="failures"></div>
+      </section>
+    </main>
+
+    <p class="footnote">Times come from the Google Maps Routes API with live traffic. Data is stored in a local SQLite file.</p>
+  </div>
+
+  <div class="tooltip" id="tooltip" role="status" aria-live="polite" hidden></div>
+  <script src="/static/charts.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

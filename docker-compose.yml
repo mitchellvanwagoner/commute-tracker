@@ -1,0 +1,20 @@
+services:
+  commute-tracker:
+    build: .
+    image: commute-tracker:latest
+    container_name: commute-tracker
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - commute-data:/data
+      # Uncomment to track more than one route (see routes.example.yml):
+      # - ./routes.yml:/app/routes.yml:ro
+    environment:
+      PORT: 8080
+      DB_PATH: /data/commutes.db
+
+volumes:
+  commute-data:

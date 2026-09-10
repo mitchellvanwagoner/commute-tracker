@@ -1,0 +1,22 @@
+# Optional. Copy to routes.yml to track more than one commute at a time.
+# When routes.yml exists it replaces the single route defined in .env
+# (GOOGLE_MAPS_API_KEY still comes from the environment).
+
+defaults:
+  timezone: America/Los_Angeles
+  interval_minutes: 15
+  days: mon,tue,wed,thu,fri
+
+routes:
+  - name: Morning commute
+    origin: 1600 Amphitheatre Parkway, Mountain View, CA
+    destination: 1 Ferry Building, San Francisco, CA
+    window_start: "07:00"
+    window_end: "09:00"
+
+  - name: Evening commute
+    origin: 1 Ferry Building, San Francisco, CA
+    destination: 1600 Amphitheatre Parkway, Mountain View, CA
+    window_start: "16:30"
+    window_end: "18:30"
+    interval_minutes: 10
