@@ -19,6 +19,8 @@ process, and the database sits on a volume so history survives rebuilds.
   days. This is the chart that answers "what time should I leave?"
 - **Average by weekday** — which day of the week costs you the most.
 - **Daily table** and a **CSV export** of every raw sample.
+- **Today's status** — a colored dot and a plain-English verdict, the same one the
+  daily push notification sends.
 
 Charts are hand-rolled SVG with a hover crosshair and tooltips — no CDN, so the
 dashboard works on a network with no outbound access.
@@ -56,6 +58,7 @@ cp .env.example .env
 | `TRAFFIC_MODEL` | `TRAFFIC_AWARE` (default) or `TRAFFIC_AWARE_OPTIMAL` (more accurate, costs more) |
 | `PORT` | Dashboard port, default `8080` |
 | `DB_PATH` | SQLite file, default `/data/commutes.db` in the container |
+| `NOTIFY_AT` + a service | Daily push notification — see [below](#daily-push-notification) |
 
 ### 3. Run
 
@@ -70,6 +73,66 @@ works right away without waiting:
 
 ```bash
 docker compose exec commute-tracker python -m commute_tracker sample
+```
+
+## Daily push notification
+
+At a time you choose, the tracker pushes that day's commute to your phone: how
+long it took, how that compares to normal, a severity color, and a tap-through
+Google Maps link that opens the route in the Maps app.
+
+    🔴 Morning commute: 39 min, 8% slower
+
+    Busier than normal
+    Today  avg 38.6 min  (best 32.8, worst 43.1) from 9 samples
+    Normal 35.8 min ± 1.8 over the last 21 days
+    Today is +2.7 min vs normal
+
+### Severity
+
+The day's average is compared against the trailing baseline of *daily* averages,
+measured in standard deviations rather than a flat percentage — so a route that
+swings by ten minutes either way as a matter of course does not cry wolf, while a
+normally metronomic route flags a smaller slip.
+
+| Color | Meaning | Rule |
+| --- | --- | --- |
+| 🔴 red | Busier than normal | more than +1σ above the baseline |
+| 🟡 yellow | A typical day | within ±1σ |
+| 🟢 green | Lighter than normal | more than −1σ below the baseline |
+| ⚪ grey | Not enough history yet | fewer than `NOTIFY_MIN_BASELINE_DAYS` of data, or no samples today |
+
+Tune with `NOTIFY_THRESHOLD_SIGMA` (default `1.0`), `NOTIFY_BASELINE_DAYS`
+(default 30) and `NOTIFY_MIN_BASELINE_DAYS` (default 5). Red notifications are
+sent at high priority so they can break through quiet hours; grey ones are sent
+quietly.
+
+### Choosing a service
+
+Set up either or both — whichever have credentials get the report, and if neither
+does, no notification job is scheduled.
+
+**[ntfy](https://ntfy.sh)** — free, no account. Install the app, subscribe to a
+topic name that nobody else would guess (anyone who knows the topic can read it),
+and set `NTFY_TOPIC` to the same string. `NTFY_SERVER` and `NTFY_TOKEN` point it
+at a self-hosted or protected instance instead.
+
+**[Pushover](https://pushover.net)** — one-time purchase per platform. Create an
+application to get its API token, then set `PUSHOVER_TOKEN` and `PUSHOVER_USER`
+(your user key, on the Pushover dashboard).
+
+Then pick a time — set `NOTIFY_AT` to something after `WINDOW_END` so the report
+covers the whole window:
+
+```bash
+NOTIFY_AT=09:30
+NTFY_TOPIC=your-hard-to-guess-topic
+```
+
+Send one immediately to check it all works:
+
+```bash
+docker compose exec commute-tracker python -m commute_tracker notify
 ```
 
 ## Tracking more than one commute
@@ -87,6 +150,8 @@ python -m commute_tracker serve      # dashboard + scheduler (what the container
 python -m commute_tracker sample     # take one measurement now and store it
 python -m commute_tracker stats      # print a summary per route
 python -m commute_tracker schedule   # show sample times and the monthly call estimate
+python -m commute_tracker report     # print today's report and its severity
+python -m commute_tracker notify     # push today's report now
 ```
 
 ## Running without Docker
@@ -103,6 +168,8 @@ cp .env.example .env    # fill it in; set DB_PATH=data/commutes.db
 | --- | --- |
 | `commute_tracker/config.py` | Loads routes from `.env` or `routes.yml`; validates windows, days, timezones |
 | `commute_tracker/maps.py` | Routes API client; parses live and free-flow durations |
+| `commute_tracker/report.py` | Scores today against the baseline; severity, wording, Maps link |
+| `commute_tracker/notify.py` | Push delivery (ntfy, Pushover); one class per provider |
 | `commute_tracker/db.py` | SQLite schema, writes, and every aggregation the dashboard needs |
 | `commute_tracker/tracker.py` | Turns a window into one cron job per sample time and runs them |
 | `commute_tracker/web/app.py` | FastAPI: the JSON API, the CSV export, and the page |
@@ -112,6 +179,11 @@ Each route's window becomes a set of cron jobs — one per clock time — rather
 single interval timer. That way every day's samples land at the same clock times,
 which is what makes the time-of-day chart comparable across days. Failed lookups
 are recorded too, so a gap in a chart can always be explained.
+
+The daily report reads the same aggregations the dashboard does, so the badge on
+the page and the notification on your phone can never disagree. A provider that
+fails is logged and reported per-channel rather than raised — one dead channel
+must not silence the other or take the scheduler down.
 
 ## Development
 

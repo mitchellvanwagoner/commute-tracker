@@ -28,6 +28,7 @@
             <option value="">All time</option>
           </select>
         </label>
+        <a class="button" id="maps-link" target="_blank" rel="noopener">Open in Maps</a>
         <a class="button" id="csv-link" href="/api/samples.csv">Export CSV</a>
       </div>
     </header>
@@ -38,6 +39,10 @@
           <p class="label">Average commute</p>
           <p class="value" id="hero-value">&mdash;</p>
           <p class="sub" id="hero-sub"></p>
+          <p class="status" id="today-status" hidden>
+            <span class="dot" id="today-dot"></span>
+            <span id="today-text"></span>
+          </p>
         </div>
         <div class="tiles" id="tiles"></div>
       </section>

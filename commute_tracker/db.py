@@ -183,9 +183,21 @@ class Database:
         result["failures"] = failures
         return result
 
-    def daily_stats(self, route_id: str, *, days: int | None = None) -> list[dict]:
-        """One row per day: min, max, average and sample count."""
-        where, params = self._window(route_id, days)
+    def daily_stats(
+        self,
+        route_id: str,
+        *,
+        days: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[dict]:
+        """One row per day: min, max, average and sample count.
+
+        ``days`` is relative to today; ``since``/``until`` are explicit ``YYYY-MM-DD``
+        bounds (inclusive), which is what the daily report needs so its baseline
+        does not depend on the wall clock at the moment of the query.
+        """
+        where, params = self._window(route_id, days, since=since, until=until)
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
@@ -275,14 +287,26 @@ class Database:
         return [dict(row) for row in rows]
 
     @staticmethod
-    def _window(route_id: str, days: int | None) -> tuple[str, tuple]:
-        """Build the shared WHERE clause for a route, optionally limited to N days."""
+    def _window(
+        route_id: str,
+        days: int | None,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> tuple[str, tuple]:
+        """Build the shared WHERE clause for a route over an optional date window."""
+        clauses = ["route_id = ?"]
+        params: list = [route_id]
         if days:
-            return (
-                "WHERE route_id = ? AND local_date >= date('now', ?)",
-                (route_id, f"-{int(days)} days"),
-            )
-        return "WHERE route_id = ?", (route_id,)
+            clauses.append("local_date >= date('now', ?)")
+            params.append(f"-{int(days)} days")
+        if since:
+            clauses.append("local_date >= ?")
+            params.append(since)
+        if until:
+            clauses.append("local_date <= ?")
+            params.append(until)
+        return "WHERE " + " AND ".join(clauses), tuple(params)
 
 
 def _percentile(sorted_values: list[int], fraction: float) -> float | None:

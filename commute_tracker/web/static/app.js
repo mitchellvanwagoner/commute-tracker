@@ -80,6 +80,31 @@ function renderSummary(summary) {
   ].join("");
 }
 
+/** Today's status pill: a colored dot plus the wording that explains it. */
+function renderReport(report) {
+  const pill = $("today-status");
+  if (!report) {
+    pill.hidden = true;
+    return;
+  }
+  pill.hidden = false;
+  $("today-dot").style.background = report.color;
+  const parts = [report.label];
+  if (report.samples && report.delta_percent != null) {
+    const direction = report.delta_percent >= 0 ? "slower" : "faster";
+    parts.push(
+      `today ${(report.avg_seconds / 60).toFixed(1)} min, ` +
+        `${Math.abs(report.delta_percent).toFixed(0)}% ${direction} than normal`
+    );
+  } else if (report.samples) {
+    parts.push(`today ${(report.avg_seconds / 60).toFixed(1)} min`);
+  } else {
+    parts.push("no samples yet today");
+  }
+  $("today-text").textContent = parts.join(" · ");
+  if (report.maps_url) $("maps-link").href = report.maps_url;
+}
+
 function renderCharts(stats) {
   Charts.bandChart(
     $("chart-daily"),
@@ -174,6 +199,7 @@ async function refresh() {
   state.stats = stats;
   $("csv-link").href = `/api/samples.csv?${queryString()}`;
   renderSummary(stats.summary);
+  renderReport(stats.report);
   renderCharts(stats);
   renderTable(stats.daily);
   renderFailures(stats.failures);

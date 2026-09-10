@@ -14,6 +14,7 @@ testpaths = ["tests"]
 # The package is used from the repo root rather than installed, so put the root
 # on sys.path for a bare `pytest` invocation too.
 pythonpath = ["."]
+asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]

@@ -108,9 +108,11 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         """Everything the dashboard charts, in one request."""
         route_id = _resolve(route)
         db = tracker.db
+        configured = next((r for r in settings.routes if r.id == route_id), None)
         return {
             "route_id": route_id,
             "days": days,
+            "report": tracker.report_for(configured).as_dict() if configured else None,
             "summary": db.summary(route_id, days=days),
             "daily": db.daily_stats(route_id, days=days),
             "time_of_day": db.time_of_day_stats(route_id, days=days),
@@ -160,6 +162,28 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         if result is None:
             raise HTTPException(status_code=502, detail="Lookup failed; see /api/stats failures")
         return result
+
+    @app.get("/api/report")
+    async def api_report(route: str | None = None):
+        """Today's commute scored against the trailing baseline."""
+        return tracker.report_for(_route_or_404(_resolve(route))).as_dict()
+
+    @app.post("/api/notify/test")
+    async def api_notify_test(route: str | None = None):
+        """Push today's report right now -- for checking notifier setup."""
+        target = _route_or_404(_resolve(route))
+        if not tracker.notifiers:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No notifier configured; set NTFY_TOPIC "
+                    "and/or PUSHOVER_TOKEN + PUSHOVER_USER"
+                ),
+            )
+        return {
+            "report": tracker.report_for(target).as_dict(),
+            "delivery": await tracker.send_digest(target),
+        }
 
     @app.get("/")
     async def index():

@@ -4,6 +4,8 @@
     python -m commute_tracker sample     # take one measurement now and store it
     python -m commute_tracker stats      # print the summary for each route
     python -m commute_tracker schedule   # show when samples will be taken
+    python -m commute_tracker report     # print today's report and its severity
+    python -m commute_tracker notify     # push today's report now (tests notifier setup)
 """
 
 from __future__ import annotations
@@ -91,8 +93,50 @@ def cmd_schedule(args) -> int:
         print(f"\n{route.name} [{route.id}] ({route.timezone})")
         print(f"  days    {', '.join(route.days)}")
         print(f"  samples {len(times)}/day: {', '.join(times)}")
+        if route.notify_at:
+            channels = ", ".join(n.name for n in tracker.notifiers) or "no notifier configured"
+            print(
+                f"  report  {route.notify_at.strftime('%H:%M')} on "
+                f"{', '.join(route.digest_days)} via {channels}"
+            )
     print(f"\n~{tracker.estimated_calls_per_month()} Routes API calls per month")
     return 0
+
+
+def cmd_report(args) -> int:
+    settings = load_settings()
+    tracker = CommuteTracker(settings)
+    for route in settings.routes:
+        report = tracker.report_for(route)
+        print(f"\n{report.title()}")
+        print("  " + report.body().replace("\n", "\n  "))
+        print(f"  {report.maps_url}")
+    return 0
+
+
+def cmd_notify(args) -> int:
+    settings = load_settings()
+    tracker = CommuteTracker(settings)
+    if not tracker.notifiers:
+        print(
+            "No notifier configured. Set NTFY_TOPIC and/or PUSHOVER_TOKEN + PUSHOVER_USER.",
+            file=sys.stderr,
+        )
+        return 2
+
+    async def run() -> list[dict]:
+        try:
+            return [await tracker.send_digest(route) for route in settings.routes]
+        finally:
+            await tracker.shutdown()
+
+    results = asyncio.run(run())
+    failed = False
+    for route, result in zip(settings.routes, results, strict=True):
+        for channel, status in result.items():
+            print(f"{route.id} -> {channel}: {status}")
+            failed = failed or status != "sent"
+    return 1 if failed else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,6 +151,8 @@ def build_parser() -> argparse.ArgumentParser:
     stats.add_argument("--days", type=int, default=None, help="limit to the last N days")
 
     sub.add_parser("schedule", help="show the planned sample times")
+    sub.add_parser("report", help="print today's report and severity")
+    sub.add_parser("notify", help="push today's report now")
     return parser
 
 
@@ -119,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
         "sample": cmd_sample,
         "stats": cmd_stats,
         "schedule": cmd_schedule,
+        "report": cmd_report,
+        "notify": cmd_notify,
     }
     handler = handlers.get(args.command or "serve")
     try:

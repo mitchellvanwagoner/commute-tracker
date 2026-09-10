@@ -77,3 +77,24 @@ def test_dashboard_page_is_served(client):
     response = client.get("/")
     assert response.status_code == 200
     assert "Commute Tracker" in response.text
+
+
+def test_report_endpoint_returns_today_severity_and_a_maps_link(client):
+    report = client.get("/api/report").json()
+    assert report["route_id"] == "morning-commute"
+    # The fixture's samples are historical, so today has none to score.
+    assert report["severity"] == "grey"
+    assert report["maps_url"].startswith("https://www.google.com/maps/dir/")
+    assert report["color"] == "#898781"
+
+
+def test_stats_carries_the_same_report_for_the_dashboard_badge(client):
+    stats = client.get("/api/stats").json()
+    assert stats["report"]["route_id"] == "morning-commute"
+    assert stats["report"]["label"]
+
+
+def test_notify_test_is_refused_when_no_notifier_is_configured(client):
+    response = client.post("/api/notify/test")
+    assert response.status_code == 400
+    assert "NTFY_TOPIC" in response.json()["detail"]

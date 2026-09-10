@@ -76,6 +76,8 @@ class Route:
     interval_minutes: int
     days: list[str]
     timezone: str
+    notify_at: time | None = None
+    notify_days: list[str] | None = None
 
     def __post_init__(self) -> None:
         if self.window_end <= self.window_start:
@@ -93,6 +95,11 @@ class Route:
     @property
     def tzinfo(self) -> ZoneInfo:
         return ZoneInfo(self.timezone)
+
+    @property
+    def digest_days(self) -> list[str]:
+        """Days the daily report goes out; the tracked days unless overridden."""
+        return self.notify_days or self.days
 
     def sample_times(self) -> list[time]:
         """Every clock time inside the window, stepping by ``interval_minutes``.
@@ -123,7 +130,18 @@ class Route:
             interval_minutes=int(merged.get("interval_minutes", 15)),
             days=parse_days(merged.get("days", "mon,tue,wed,thu,fri")),
             timezone=str(merged.get("timezone", "UTC")),
+            notify_at=parse_time(merged["notify_at"]) if merged.get("notify_at") else None,
+            notify_days=parse_days(merged["notify_days"]) if merged.get("notify_days") else None,
         )
+
+
+@dataclass(frozen=True)
+class NotifySettings:
+    """How the daily report is scored. Delivery lives in :mod:`commute_tracker.notify`."""
+
+    baseline_days: int = 30
+    min_baseline_days: int = 5
+    threshold: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -138,6 +156,7 @@ class Settings:
     routes_file: Path | None = None
     traffic_model: str = "TRAFFIC_AWARE"
     request_timeout: float = 20.0
+    notify: NotifySettings = field(default_factory=NotifySettings)
     extras: dict = field(default_factory=dict)
 
 
@@ -156,6 +175,8 @@ def _routes_from_env() -> list[Route]:
                 # explicit fallback, since some shells strip TZ from the
                 # environment they hand to child processes.
                 "timezone": os.getenv("TIMEZONE") or os.getenv("TZ") or "UTC",
+                "notify_at": os.getenv("NOTIFY_AT", "").strip() or None,
+                "notify_days": os.getenv("NOTIFY_DAYS", "").strip() or None,
             }
         )
     ]
@@ -201,4 +222,9 @@ def load_settings() -> Settings:
         routes_file=routes_file,
         traffic_model=os.getenv("TRAFFIC_MODEL", "TRAFFIC_AWARE"),
         request_timeout=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20")),
+        notify=NotifySettings(
+            baseline_days=int(os.getenv("NOTIFY_BASELINE_DAYS", "30")),
+            min_baseline_days=int(os.getenv("NOTIFY_MIN_BASELINE_DAYS", "5")),
+            threshold=float(os.getenv("NOTIFY_THRESHOLD_SIGMA", "1.0")),
+        ),
     )

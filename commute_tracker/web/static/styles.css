@@ -171,3 +171,21 @@ th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform
   .field { flex: 1 1 130px; }
   select { width: 100%; }
 }
+
+/* Today's severity. The dot carries the status color; the wording beside it
+   carries the meaning, so the state never rests on hue alone. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.status .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-muted);
+}

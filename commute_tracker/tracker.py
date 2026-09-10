@@ -18,14 +18,21 @@ from apscheduler.triggers.cron import CronTrigger
 from .config import Route, Settings
 from .db import Database
 from .maps import MapsError, RoutesClient
+from .notify import Notifier, deliver, notifiers_from_env
+from .report import Report, build_report
 
 log = logging.getLogger(__name__)
 
 
 class CommuteTracker:
-    """Owns the Routes API client, the database and the sampling schedule."""
+    """Owns the Routes API client, the database, the schedule and the daily digest."""
 
-    def __init__(self, settings: Settings, db: Database | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        db: Database | None = None,
+        notifiers: list[Notifier] | None = None,
+    ):
         self.settings = settings
         self.db = db or Database(settings.db_path)
         self.client = RoutesClient(
@@ -33,6 +40,7 @@ class CommuteTracker:
             timeout=settings.request_timeout,
             traffic_model=settings.traffic_model,
         )
+        self.notifiers = notifiers_from_env() if notifiers is None else notifiers
         self.scheduler = AsyncIOScheduler()
 
     # --------------------------------------------------------------- sampling
@@ -79,6 +87,24 @@ class CommuteTracker:
         )
         return [r for r in results if r]
 
+    # ----------------------------------------------------------- daily digest
+
+    def report_for(self, route: Route) -> Report:
+        """Score today's commute for one route against its trailing baseline."""
+        options = self.settings.notify
+        return build_report(
+            self.db,
+            route,
+            baseline_days=options.baseline_days,
+            min_baseline_days=options.min_baseline_days,
+            threshold=options.threshold,
+        )
+
+    async def send_digest(self, route: Route) -> dict[str, str]:
+        """Build today's report for a route and push it to every notifier."""
+        report = self.report_for(route)
+        return await deliver(report, self.notifiers, timeout=self.settings.request_timeout)
+
     # -------------------------------------------------------------- schedule
 
     def schedule(self) -> None:
@@ -112,6 +138,48 @@ class CommuteTracker:
                 len(times),
                 route.timezone,
             )
+            self._schedule_digest(route)
+
+    def _schedule_digest(self, route: Route) -> None:
+        """Register the daily report job, if one is both configured and deliverable."""
+        if route.notify_at is None:
+            return
+        if not self.notifiers:
+            log.warning(
+                "[%s] NOTIFY_AT is set but no notifier is configured "
+                "(set NTFY_TOPIC and/or PUSHOVER_TOKEN + PUSHOVER_USER)",
+                route.id,
+            )
+            return
+        if route.notify_at <= route.window_end:
+            log.warning(
+                "[%s] the daily report at %s fires before the window closes at %s, "
+                "so it will summarize a partial day",
+                route.id,
+                route.notify_at.strftime("%H:%M"),
+                route.window_end.strftime("%H:%M"),
+            )
+        self.scheduler.add_job(
+            self.send_digest,
+            CronTrigger(
+                day_of_week=",".join(route.digest_days),
+                hour=route.notify_at.hour,
+                minute=route.notify_at.minute,
+                timezone=route.tzinfo,
+            ),
+            args=[route],
+            id=f"{route.id}-digest",
+            replace_existing=True,
+            misfire_grace_time=3600,
+            max_instances=1,
+        )
+        log.info(
+            "[%s] daily report at %s on %s via %s",
+            route.id,
+            route.notify_at.strftime("%H:%M"),
+            ",".join(route.digest_days),
+            ", ".join(n.name for n in self.notifiers),
+        )
 
     def start(self) -> None:
         self.schedule()
