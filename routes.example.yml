@@ -1,6 +1,9 @@
-# Optional. Copy to routes.yml to track more than one commute at a time.
-# When routes.yml exists it replaces the single route defined in .env
-# (GOOGLE_MAPS_API_KEY still comes from the environment).
+# Optional. Copy to routes.yml to start with more than one commute.
+#
+# This is a SEED, used only when the database is first created: it replaces the
+# single route defined in .env. From then on routes are managed in the dashboard
+# and this file is ignored, so edits made in the UI survive a restart.
+# (GOOGLE_MAPS_API_KEY always comes from the environment.)
 
 defaults:
   timezone: America/Los_Angeles

@@ -58,7 +58,7 @@ def parse_days(value: str | list[str]) -> list[str]:
     return sorted(days, key=DAY_NAMES.index)
 
 
-def _slugify(name: str) -> str:
+def slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return slug or "route"
 
@@ -78,6 +78,7 @@ class Route:
     timezone: str
     notify_at: time | None = None
     notify_days: list[str] | None = None
+    enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.window_end <= self.window_start:
@@ -121,7 +122,7 @@ class Route:
             raise ConfigError(f"Route is missing required field(s): {', '.join(missing)}")
         name = str(merged.get("name") or "commute").strip()
         return cls(
-            id=str(merged.get("id") or _slugify(name)),
+            id=str(merged.get("id") or slugify(name)),
             name=name,
             origin=str(merged["origin"]).strip(),
             destination=str(merged["destination"]).strip(),
@@ -132,7 +133,54 @@ class Route:
             timezone=str(merged.get("timezone", "UTC")),
             notify_at=parse_time(merged["notify_at"]) if merged.get("notify_at") else None,
             notify_days=parse_days(merged["notify_days"]) if merged.get("notify_days") else None,
+            enabled=bool(merged.get("enabled", True)),
         )
+
+    @classmethod
+    def from_row(cls, row: dict) -> Route:
+        """Rebuild a route from its database row."""
+        return cls.from_dict(
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "origin": row["origin"],
+                "destination": row["destination"],
+                "window_start": row["window_start"],
+                "window_end": row["window_end"],
+                "interval_minutes": row["interval_minutes"],
+                "days": row["days"],
+                "timezone": row["timezone"],
+                "notify_at": row["notify_at"],
+                "notify_days": row["notify_days"],
+                "enabled": bool(row["enabled"]),
+            }
+        )
+
+    def to_row(self) -> dict:
+        """Flatten to the column shape the routes table stores."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "origin": self.origin,
+            "destination": self.destination,
+            "window_start": self.window_start.strftime("%H:%M"),
+            "window_end": self.window_end.strftime("%H:%M"),
+            "interval_minutes": self.interval_minutes,
+            "days": ",".join(self.days),
+            "timezone": self.timezone,
+            "notify_at": self.notify_at.strftime("%H:%M") if self.notify_at else None,
+            "notify_days": ",".join(self.notify_days) if self.notify_days else None,
+            "enabled": int(self.enabled),
+        }
+
+    def as_dict(self) -> dict:
+        """JSON shape for the API and the dashboard's route editor."""
+        row = self.to_row()
+        row["days"] = self.days
+        row["notify_days"] = self.notify_days
+        row["enabled"] = self.enabled
+        row["samples_per_day"] = len(self.sample_times())
+        return row
 
 
 @dataclass(frozen=True)

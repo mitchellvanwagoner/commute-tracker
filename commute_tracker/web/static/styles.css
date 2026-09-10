@@ -13,6 +13,10 @@
   --series-1:       #2a78d6;
   --series-1-wash:  rgba(42, 120, 214, 0.10);
   --critical:       #d03b3b;
+  /* Status colors are fixed rather than themed: these steps clear 3:1 on both
+     the light and the dark surface, so they need no per-theme variant. */
+  --good:           #0ca30c;
+  --warning:        #fab219;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -188,4 +192,130 @@ th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform
   border-radius: 50%;
   flex: none;
   background: var(--text-muted);
+}
+
+/* ---- Route management ---------------------------------------------------- */
+
+.route-name { font-weight: 600; }
+.route-path { color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
+
+td.actions { white-space: nowrap; }
+
+.link {
+  background: none;
+  border: 0;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--series-1);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.link:hover { background: var(--series-1-wash); }
+.link.danger { color: var(--critical); }
+.link.danger:hover { background: rgba(208, 59, 59, 0.10); }
+
+/* Status tags pair a dot with a word, so state never rests on color alone. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.tag::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.tag.on::before { background: var(--good); }
+.tag.off::before { background: var(--warning); }
+
+.button.primary {
+  background: var(--series-1);
+  border-color: var(--series-1);
+  color: #ffffff;
+}
+.button.primary:hover { opacity: 0.92; }
+.button.danger { color: var(--critical); }
+.button:disabled { opacity: 0.55; cursor: default; }
+
+/* ---- Editor dialog ------------------------------------------------------- */
+
+dialog.editor {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  padding: 20px;
+  width: min(560px, calc(100vw - 32px));
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.22);
+}
+dialog.editor::backdrop { background: rgba(0, 0, 0, 0.42); }
+dialog.editor h2 { margin-bottom: 14px; }
+
+.row-field { display: block; margin-bottom: 12px; }
+.row-field > span {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.row-field input {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.row-field input:focus-visible { outline: 2px solid var(--series-1); outline-offset: 1px; }
+
+.field-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.field-grid + .field-grid { grid-template-columns: repeat(2, 1fr); }
+
+fieldset.days {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px 10px;
+  margin: 0 0 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+fieldset.days legend {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 4px;
+}
+fieldset.days label,
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.checkbox { margin-bottom: 12px; }
+
+.test-result { font-size: 12px; min-height: 18px; color: var(--text-secondary); }
+.test-result.good { color: var(--good); }
+.test-result.bad { color: var(--critical); }
+
+.editor-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.editor-actions .spacer { flex: 1; }
+
+@media (max-width: 560px) {
+  .field-grid, .field-grid + .field-grid { grid-template-columns: 1fr 1fr; }
+  .editor-actions .spacer { display: none; }
+  .editor-actions { justify-content: flex-end; }
 }

@@ -20,6 +20,7 @@ from .db import Database
 from .maps import MapsError, RoutesClient
 from .notify import Notifier, deliver, notifiers_from_env
 from .report import Report, build_report
+from .routes import RouteStore
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +42,19 @@ class CommuteTracker:
             traffic_model=settings.traffic_model,
         )
         self.notifiers = notifiers_from_env() if notifiers is None else notifiers
+        self.store = RouteStore(self.db)
+        # First run only: lift whatever .env / routes.yml describe into the
+        # database, which is the editable source of truth from then on.
+        self.store.seed(settings.routes)
         self.scheduler = AsyncIOScheduler()
+
+    @property
+    def routes(self) -> list[Route]:
+        """Every configured route, enabled or not."""
+        return self.store.all()
+
+    def active_routes(self) -> list[Route]:
+        return self.store.all(enabled_only=True)
 
     # --------------------------------------------------------------- sampling
 
@@ -83,7 +96,7 @@ class CommuteTracker:
     async def sample_all(self) -> list[dict]:
         """Sample every configured route once, right now."""
         results = await asyncio.gather(
-            *(self.sample_route(route) for route in self.settings.routes)
+            *(self.sample_route(route) for route in self.active_routes())
         )
         return [r for r in results if r]
 
@@ -108,37 +121,60 @@ class CommuteTracker:
     # -------------------------------------------------------------- schedule
 
     def schedule(self) -> None:
-        """Register a cron job for every sample time of every route."""
-        for route in self.settings.routes:
-            times = route.sample_times()
-            for clock in times:
-                self.scheduler.add_job(
-                    self.sample_route,
-                    CronTrigger(
-                        day_of_week=",".join(route.days),
-                        hour=clock.hour,
-                        minute=clock.minute,
-                        timezone=route.tzinfo,
-                    ),
-                    args=[route],
-                    id=f"{route.id}-{clock.strftime('%H%M')}",
-                    replace_existing=True,
-                    misfire_grace_time=120,
-                    max_instances=1,
-                )
-            log.info(
-                "[%s] %s -> %s | %s %s-%s every %dm (%d samples/day, %s)",
-                route.id,
-                route.origin,
-                route.destination,
-                ",".join(route.days),
-                route.window_start.strftime("%H:%M"),
-                route.window_end.strftime("%H:%M"),
-                route.interval_minutes,
-                len(times),
-                route.timezone,
+        """Register jobs for every enabled route."""
+        for route in self.active_routes():
+            self.schedule_route(route)
+
+    def schedule_route(self, route: Route) -> None:
+        """Register a cron job for each of one route's sample times."""
+        times = route.sample_times()
+        for clock in times:
+            self.scheduler.add_job(
+                self.sample_route,
+                CronTrigger(
+                    day_of_week=",".join(route.days),
+                    hour=clock.hour,
+                    minute=clock.minute,
+                    timezone=route.tzinfo,
+                ),
+                args=[route],
+                id=f"{route.id}-{clock.strftime('%H%M')}",
+                replace_existing=True,
+                misfire_grace_time=120,
+                max_instances=1,
             )
-            self._schedule_digest(route)
+        log.info(
+            "[%s] %s -> %s | %s %s-%s every %dm (%d samples/day, %s)",
+            route.id,
+            route.origin,
+            route.destination,
+            ",".join(route.days),
+            route.window_start.strftime("%H:%M"),
+            route.window_end.strftime("%H:%M"),
+            route.interval_minutes,
+            len(times),
+            route.timezone,
+        )
+        self._schedule_digest(route)
+
+    def unschedule_route(self, route_id: str) -> None:
+        """Drop every job belonging to a route (its ids are all prefixed with it)."""
+        for job in self.scheduler.get_jobs():
+            if job.id == f"{route_id}-digest" or job.id.startswith(f"{route_id}-"):
+                job.remove()
+
+    def reschedule_route(self, route_id: str) -> None:
+        """Re-register a route after it was edited, added, disabled or deleted.
+
+        Called from the API so an edit takes effect immediately rather than at
+        the next restart. A no-op before the scheduler is running.
+        """
+        if not self.scheduler.running:
+            return
+        self.unschedule_route(route_id)
+        route = self.store.get(route_id)
+        if route and route.enabled:
+            self.schedule_route(route)
 
     def _schedule_digest(self, route: Route) -> None:
         """Register the daily report job, if one is both configured and deliverable."""
@@ -146,7 +182,7 @@ class CommuteTracker:
             return
         if not self.notifiers:
             log.warning(
-                "[%s] NOTIFY_AT is set but no notifier is configured "
+                "[%s] a daily report time is set but no notifier is configured "
                 "(set NTFY_TOPIC and/or PUSHOVER_TOKEN + PUSHOVER_USER)",
                 route.id,
             )
@@ -193,6 +229,6 @@ class CommuteTracker:
     def estimated_calls_per_month(self) -> int:
         """Rough Routes API call count, for keeping an eye on billing."""
         total = 0
-        for route in self.settings.routes:
+        for route in self.active_routes():
             total += len(route.sample_times()) * len(route.days) * 52 // 12
         return total

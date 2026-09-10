@@ -21,6 +21,8 @@ process, and the database sits on a volume so history survives rebuilds.
 - **Daily table** and a **CSV export** of every raw sample.
 - **Today's status** — a colored dot and a plain-English verdict, the same one the
   daily push notification sends.
+- **Route management** — add, edit, pause and delete routes from the page itself;
+  no restart, no editing files.
 
 Charts are hand-rolled SVG with a hover crosshair and tooltips — no CDN, so the
 dashboard works on a network with no outbound access.
@@ -46,6 +48,11 @@ minutes on weekdays is roughly 200 calls a month.
 cp .env.example .env
 # then edit .env: API key, the two addresses, the window, and the timezone
 ```
+
+`.env` only needs the API key and one starter route. **Routes are stored in the
+database and edited from the dashboard** — `.env` and `routes.yml` seed them the
+first time the app runs against a fresh database, and are not read again. That is
+deliberate: a restart must never silently undo an edit you made in the UI.
 
 | Variable | Meaning |
 | --- | --- |
@@ -135,13 +142,32 @@ Send one immediately to check it all works:
 docker compose exec commute-tracker python -m commute_tracker notify
 ```
 
-## Tracking more than one commute
+## Managing routes
 
-Copy `routes.example.yml` to `routes.yml`, list as many routes as you like (a
-morning and an evening leg, for instance), and uncomment the `routes.yml` bind
-mount in `docker-compose.yml`. When `routes.yml` is present it replaces the single
-route from `.env`; the API key still comes from the environment. The dashboard
-grows a route selector.
+The **Routes** card on the dashboard is the normal way to do this. *Add a route*
+opens an editor for the two addresses, the tracking window, how often to check,
+which days, the timezone and an optional daily report time. **Test addresses**
+does a live lookup without saving, so you find out that an address is ambiguous
+or that your API key is wrong before you commit to it.
+
+Each route can be:
+
+- **Edited** — including its addresses. The route keeps its identity, so its
+  collected history stays attached (renaming it does not orphan the data).
+- **Paused** — stops sampling and stops the report, keeps everything recorded.
+- **Deleted** — you are asked whether to keep the history. Kept history stays
+  visible in the dashboard as a read-only route; re-creating a route with the
+  same name reclaims its old id and reattaches the data.
+
+Every change takes effect immediately: the API reschedules that route's jobs as
+part of the same request, so nothing needs restarting.
+
+### Seeding several routes at once
+
+To start with more than one route, copy `routes.example.yml` to `routes.yml`,
+list them there, and uncomment the `routes.yml` bind mount in
+`docker-compose.yml`. Remember this is a *seed*: once the database exists, the
+dashboard owns the routes and the file is ignored.
 
 ## Command line
 
@@ -171,9 +197,17 @@ cp .env.example .env    # fill it in; set DB_PATH=data/commutes.db
 | `commute_tracker/report.py` | Scores today against the baseline; severity, wording, Maps link |
 | `commute_tracker/notify.py` | Push delivery (ntfy, Pushover); one class per provider |
 | `commute_tracker/db.py` | SQLite schema, writes, and every aggregation the dashboard needs |
+| `commute_tracker/routes.py` | The route store: validation, CRUD, and one-time seeding from config |
 | `commute_tracker/tracker.py` | Turns a window into one cron job per sample time and runs them |
 | `commute_tracker/web/app.py` | FastAPI: the JSON API, the CSV export, and the page |
 | `commute_tracker/web/static/` | The dashboard — plain HTML, CSS and SVG charts |
+
+### A note on access
+
+The dashboard can change what the tracker does and spends API quota, and it has
+no login. That is fine on a home network; do not port-forward it to the open
+internet. Put it behind your existing reverse proxy, VPN or Tailscale if you want
+it from outside.
 
 Each route's window becomes a set of cron jobs — one per clock time — rather than a
 single interval timer. That way every day's samples land at the same clock times,

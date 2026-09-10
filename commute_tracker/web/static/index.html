@@ -73,6 +73,17 @@
 
       <section class="card">
         <div class="card-head row">
+          <div>
+            <h2>Routes</h2>
+            <p class="sub">Addresses, tracking window and report time. Changes take effect immediately.</p>
+          </div>
+          <button class="button" id="route-add">Add a route</button>
+        </div>
+        <div id="routes-table"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head row">
           <h2>Daily table</h2>
           <button class="button ghost" id="table-toggle" aria-expanded="false">Show table</button>
         </div>
@@ -91,8 +102,95 @@
     <p class="footnote">Times come from the Google Maps Routes API with live traffic. Data is stored in a local SQLite file.</p>
   </div>
 
+
+  <dialog id="route-editor" class="editor">
+    <form id="route-form" method="dialog">
+      <h2 id="editor-title">Add a route</h2>
+
+      <label class="row-field">
+        <span>Name</span>
+        <input name="name" type="text" placeholder="Morning commute" required maxlength="80">
+      </label>
+
+      <label class="row-field">
+        <span>From</span>
+        <input name="origin" type="text" placeholder="1600 Amphitheatre Pkwy, Mountain View, CA" required>
+      </label>
+
+      <label class="row-field">
+        <span>To</span>
+        <input name="destination" type="text" placeholder="1 Ferry Building, San Francisco, CA" required>
+      </label>
+
+      <div class="field-grid">
+        <label class="row-field">
+          <span>Window start</span>
+          <input name="window_start" type="time" required>
+        </label>
+        <label class="row-field">
+          <span>Window end</span>
+          <input name="window_end" type="time" required>
+        </label>
+        <label class="row-field">
+          <span>Check every (min)</span>
+          <input name="interval_minutes" type="number" min="1" max="1440" required>
+        </label>
+      </div>
+
+      <fieldset class="days">
+        <legend>Days</legend>
+        <label><input type="checkbox" name="days" value="mon"> Mon</label>
+        <label><input type="checkbox" name="days" value="tue"> Tue</label>
+        <label><input type="checkbox" name="days" value="wed"> Wed</label>
+        <label><input type="checkbox" name="days" value="thu"> Thu</label>
+        <label><input type="checkbox" name="days" value="fri"> Fri</label>
+        <label><input type="checkbox" name="days" value="sat"> Sat</label>
+        <label><input type="checkbox" name="days" value="sun"> Sun</label>
+      </fieldset>
+
+      <div class="field-grid">
+        <label class="row-field">
+          <span>Timezone</span>
+          <input name="timezone" type="text" list="timezone-options" required>
+          <datalist id="timezone-options"></datalist>
+        </label>
+        <label class="row-field">
+          <span>Daily report at (optional)</span>
+          <input name="notify_at" type="time">
+        </label>
+      </div>
+
+      <label class="checkbox">
+        <input type="checkbox" name="enabled" checked>
+        <span>Track this route</span>
+      </label>
+
+      <p id="route-test-result" class="test-result"></p>
+
+      <div class="editor-actions">
+        <button type="button" class="button danger" id="route-delete">Delete</button>
+        <span class="spacer"></span>
+        <button type="button" class="button ghost" id="route-test">Test addresses</button>
+        <button type="button" class="button ghost" id="route-cancel">Cancel</button>
+        <button type="submit" class="button primary" id="route-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="route-delete-dialog" class="editor">
+    <h2>Delete route</h2>
+    <p class="sub" id="delete-text"></p>
+    <div class="editor-actions">
+      <span class="spacer"></span>
+      <button type="button" class="button ghost" id="delete-cancel">Cancel</button>
+      <button type="button" class="button" id="delete-keep">Delete, keep data</button>
+      <button type="button" class="button danger" id="delete-drop">Delete route and data</button>
+    </div>
+  </dialog>
+
   <div class="tooltip" id="tooltip" role="status" aria-live="polite" hidden></div>
   <script src="/static/charts.js"></script>
+  <script src="/static/routes.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

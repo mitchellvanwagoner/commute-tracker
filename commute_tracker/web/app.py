@@ -16,7 +16,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..config import Settings, load_settings
+from ..config import ConfigError, Settings, load_settings
+from ..maps import MapsError
 from ..tracker import CommuteTracker
 
 log = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
             tracker.start()
             log.info(
                 "Tracking %d route(s); ~%d Routes API calls/month",
-                len(settings.routes),
+                len(tracker.active_routes()),
                 tracker.estimated_calls_per_month(),
             )
         yield
@@ -46,47 +47,36 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
     app.state.settings = settings
 
     def _route_or_404(route_id: str):
-        for route in settings.routes:
-            if route.id == route_id:
-                return route
-        raise HTTPException(status_code=404, detail=f"Unknown route {route_id!r}")
+        route = tracker.store.get(route_id)
+        if route is None:
+            raise HTTPException(status_code=404, detail=f"Unknown route {route_id!r}")
+        return route
 
     def _resolve(route_id: str | None) -> str:
         """Default to the first configured route when none is given."""
         if route_id:
             return route_id
-        if settings.routes:
-            return settings.routes[0].id
+        routes = tracker.routes
+        if routes:
+            return routes[0].id
         raise HTTPException(status_code=404, detail="No routes are configured")
 
     @app.get("/healthz")
     async def healthz():
-        return {"status": "ok", "routes": [r.id for r in settings.routes]}
+        return {"status": "ok", "routes": [r.id for r in tracker.routes]}
 
     @app.get("/api/routes")
     async def api_routes():
         """Configured routes, annotated with how much data each has."""
         tracked = {row["route_id"]: row for row in tracker.db.tracked_routes()}
         payload = []
-        for route in settings.routes:
+        for route in tracker.routes:
             stored = tracked.pop(route.id, {})
             payload.append(
-                {
-                    "id": route.id,
-                    "name": route.name,
-                    "origin": route.origin,
-                    "destination": route.destination,
-                    "window_start": route.window_start.strftime("%H:%M"),
-                    "window_end": route.window_end.strftime("%H:%M"),
-                    "interval_minutes": route.interval_minutes,
-                    "days": route.days,
-                    "timezone": route.timezone,
-                    "samples": stored.get("samples", 0),
-                    "configured": True,
-                }
+                {**route.as_dict(), "samples": stored.get("samples", 0), "configured": True}
             )
-        # Routes that were tracked previously but are no longer configured still
-        # have history worth looking at.
+        # A deleted route keeps its history, so it stays visible read-only rather
+        # than its data silently vanishing from the dashboard.
         for row in tracked.values():
             payload.append(
                 {
@@ -95,10 +85,62 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
                     "origin": row["origin"],
                     "destination": row["destination"],
                     "samples": row["samples"],
+                    "enabled": False,
                     "configured": False,
                 }
             )
         return payload
+
+    @app.post("/api/routes", status_code=201)
+    async def api_create_route(payload: dict):
+        """Add a route from the dashboard and start tracking it immediately."""
+        try:
+            route = tracker.store.create(payload)
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        tracker.reschedule_route(route.id)
+        return route.as_dict()
+
+    @app.patch("/api/routes/{route_id}")
+    async def api_update_route(route_id: str, payload: dict):
+        """Edit a route in place. Its id, and so its history, is preserved."""
+        try:
+            route = tracker.store.update(route_id, payload)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown route {route_id!r}") from exc
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        tracker.reschedule_route(route.id)
+        return route.as_dict()
+
+    @app.delete("/api/routes/{route_id}")
+    async def api_delete_route(route_id: str, drop_history: bool = False):
+        """Stop tracking a route. Its samples are kept unless drop_history=true."""
+        if not tracker.store.delete(route_id, drop_history=drop_history):
+            raise HTTPException(status_code=404, detail=f"Unknown route {route_id!r}")
+        tracker.reschedule_route(route_id)
+        return {"deleted": route_id, "history_dropped": drop_history}
+
+    @app.post("/api/routes/validate")
+    async def api_validate_route(payload: dict):
+        """Look up two addresses without saving anything.
+
+        This is what the editor Test button calls: it proves both addresses
+        resolve and the API key works before a route is committed.
+        """
+        origin = str(payload.get("origin", "")).strip()
+        destination = str(payload.get("destination", "")).strip()
+        if not origin or not destination:
+            raise HTTPException(status_code=400, detail="Both addresses are required")
+        try:
+            travel = await tracker.client.travel_time(origin, destination)
+        except MapsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "duration_seconds": travel.duration_seconds,
+            "distance_meters": travel.distance_meters,
+            "static_duration_seconds": travel.static_duration_seconds,
+        }
 
     @app.get("/api/stats")
     async def api_stats(
@@ -108,7 +150,7 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         """Everything the dashboard charts, in one request."""
         route_id = _resolve(route)
         db = tracker.db
-        configured = next((r for r in settings.routes if r.id == route_id), None)
+        configured = tracker.store.get(route_id)
         return {
             "route_id": route_id,
             "days": days,

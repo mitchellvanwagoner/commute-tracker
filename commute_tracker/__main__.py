@@ -16,7 +16,6 @@ import logging
 import sys
 
 from .config import ConfigError, load_settings
-from .db import Database
 from .tracker import CommuteTracker
 
 
@@ -65,10 +64,9 @@ def cmd_sample(args) -> int:
 
 
 def cmd_stats(args) -> int:
-    settings = load_settings()
-    db = Database(settings.db_path)
-    for route in settings.routes:
-        summary = db.summary(route.id, days=args.days)
+    tracker = CommuteTracker(load_settings())
+    for route in tracker.routes:
+        summary = tracker.db.summary(route.id, days=args.days)
         print(f"\n{route.name} ({route.origin} -> {route.destination})")
         if not summary["samples"]:
             print("  no samples yet")
@@ -88,9 +86,10 @@ def cmd_stats(args) -> int:
 def cmd_schedule(args) -> int:
     settings = load_settings()
     tracker = CommuteTracker(settings)
-    for route in settings.routes:
+    for route in tracker.routes:
         times = [t.strftime("%H:%M") for t in route.sample_times()]
-        print(f"\n{route.name} [{route.id}] ({route.timezone})")
+        state = "" if route.enabled else "  (disabled)"
+        print(f"\n{route.name} [{route.id}] ({route.timezone}){state}")
         print(f"  days    {', '.join(route.days)}")
         print(f"  samples {len(times)}/day: {', '.join(times)}")
         if route.notify_at:
@@ -106,7 +105,7 @@ def cmd_schedule(args) -> int:
 def cmd_report(args) -> int:
     settings = load_settings()
     tracker = CommuteTracker(settings)
-    for route in settings.routes:
+    for route in tracker.routes:
         report = tracker.report_for(route)
         print(f"\n{report.title()}")
         print("  " + report.body().replace("\n", "\n  "))
@@ -124,15 +123,17 @@ def cmd_notify(args) -> int:
         )
         return 2
 
+    routes = tracker.active_routes()
+
     async def run() -> list[dict]:
         try:
-            return [await tracker.send_digest(route) for route in settings.routes]
+            return [await tracker.send_digest(route) for route in routes]
         finally:
             await tracker.shutdown()
 
     results = asyncio.run(run())
     failed = False
-    for route, result in zip(settings.routes, results, strict=True):
+    for route, result in zip(routes, results, strict=True):
         for channel, status in result.items():
             print(f"{route.id} -> {channel}: {status}")
             failed = failed or status != "sent"

@@ -39,9 +39,10 @@ function queryString() {
 function renderRouteLine() {
   const route = state.routes.find((r) => r.id === state.routeId);
   if (!route) return;
-  const window = route.window_start
+  // A route that was deleted but kept its history has no window to describe.
+  const window = route.configured
     ? ` · ${route.window_start}–${route.window_end} every ${route.interval_minutes} min · ${route.days.join(", ")}`
-    : "";
+    : " · no longer tracked";
   $("route-line").textContent = `${route.origin} → ${route.destination}${window}`;
 }
 
@@ -205,18 +206,48 @@ async function refresh() {
   renderFailures(stats.failures);
 }
 
-async function init() {
+/** Re-read the routes, keeping the current selection if it still exists. */
+async function loadRoutes() {
   state.routes = await getJSON("/api/routes");
   const select = $("route-select");
+  const previous = state.routeId;
   select.innerHTML = state.routes
-    .map((route) => `<option value="${route.id}">${route.name}</option>`)
+    .map((route) => {
+      const suffix = route.enabled === false ? " (paused)" : "";
+      return `<option value="${route.id}">${escapeHtml(route.name)}${suffix}</option>`;
+    })
     .join("");
-  state.routeId = state.routes[0]?.id ?? null;
+  state.routeId = state.routes.some((r) => r.id === previous)
+    ? previous
+    : (state.routes[0]?.id ?? null);
+  select.value = state.routeId ?? "";
   select.disabled = state.routes.length < 2;
   renderRouteLine();
+  Routes.renderTable(state.routes);
+}
 
-  select.addEventListener("change", () => {
-    state.routeId = select.value;
+function escapeHtml(value) {
+  const node = document.createElement("span");
+  node.textContent = value ?? "";
+  return node.innerHTML;
+}
+
+/** Everything the page shows, re-read from the server. */
+async function reload() {
+  await loadRoutes();
+  if (!state.routeId) {
+    $("route-line").textContent = "No routes yet \u2014 add one below to start tracking.";
+    return;
+  }
+  await refresh();
+}
+
+async function init() {
+  Routes.init();
+  await loadRoutes();
+
+  $("route-select").addEventListener("change", (event) => {
+    state.routeId = event.target.value;
     renderRouteLine();
     refresh();
   });
@@ -237,11 +268,15 @@ async function init() {
     resizeTimer = setTimeout(() => state.stats && renderCharts(state.stats), 150);
   });
 
-  await refresh();
+  if (state.routeId) await refresh();
   // The scheduler writes at most once every few minutes; a quiet poll keeps an
   // always-open dashboard current without hammering the API.
-  setInterval(refresh, 120000);
+  setInterval(() => state.routeId && refresh(), 120000);
 }
+
+// routes.js calls this after any create/edit/delete so the charts, the picker
+// and the routes table can never drift apart.
+window.Dashboard = { reload };
 
 init().catch((error) => {
   $("route-line").textContent = `Could not load data: ${error.message}`;
