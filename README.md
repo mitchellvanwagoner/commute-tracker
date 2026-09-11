@@ -103,26 +103,35 @@ docker pull ghcr.io/mitchellvanwagoner/commute-tracker:latest
 `latest` deliberately tracks releases rather than `main`, so a pull never lands on
 an untagged commit.
 
-The package inherits this repository's visibility. While the repository is
-private the image is too, so pulling it needs a one-time login with a personal
+**A new package is private, and making the repository public does not change
+that.** Container package visibility is its own setting, set once when the
+package is first published and never inherited afterwards — so a repo that was
+private at first publish leaves a private image behind even after the repo goes
+public. The symptom is an anonymous pull failing with `unauthorized`.
+
+Change it at **Packages** → **commute-tracker** → **Package settings** →
+**Danger Zone** → **Change visibility**:
+
+<https://github.com/users/mitchellvanwagoner/packages/container/commute-tracker/settings>
+
+To check whether it worked, from any machine, without a login:
+
+```bash
+docker logout ghcr.io
+docker pull ghcr.io/mitchellvanwagoner/commute-tracker:latest
+```
+
+If that succeeds the package is public. `unauthorized` means it is not, and
+no amount of repository visibility will change that.
+
+To keep the image private instead, log the pulling host in once with a personal
 access token carrying the `read:packages` scope:
 
 ```bash
 echo "$GITHUB_TOKEN" | docker login ghcr.io -u mitchellvanwagoner --password-stdin
 ```
 
-Making the package public (its page under **Packages** → **Package settings** →
-**Change visibility**) drops that step without making the source repository
-public.
-
-To cut a release, tag a commit and push the tag — the workflow publishes the
-version tags and moves `latest`:
-
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
-
-### Deploying on a host without the repository
+## Deploying on a host without the repository
 
 There is one compose file and it has no `build:` section, so it is the only file a
 deployment host needs — Unraid, a NAS, anything that never cloned this repo. Copy
