@@ -38,3 +38,29 @@ jobs:
           done
           docker logs ct
           exit 1
+
+      # The Unraid case, which is where this actually broke: /data is a bind
+      # mount owned by nobody:users (99:100), not by the image's uid 1000.
+      # Without PUID/PGID the app cannot open the database and the container
+      # dies before serving anything.
+      - name: A host directory owned by 99:100 works with PUID/PGID
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/appdata
+          sudo chown 99:100 /tmp/appdata
+          docker run -d --name ct-unraid -p 8081:8080             -e GOOGLE_MAPS_API_KEY=ci-placeholder             -e PUID=99 -e PGID=100             -v /tmp/appdata:/data             commute-tracker:ci
+          for _ in $(seq 1 20); do
+            if curl -fsS http://localhost:8081/healthz; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8081/healthz || { docker logs ct-unraid; exit 1; }
+          # The database must exist on the host, owned by the host's user.
+          sudo test -f /tmp/appdata/commutes.db || { docker logs ct-unraid; exit 1; }
+          owner=$(stat -c '%u:%g' /tmp/appdata/commutes.db)
+          echo "database owner: $owner"
+          test "$owner" = "99:100"
+
+      # The opposite guarantee: the process must not still be root.
+      - name: The app does not run as root
+        run: |
+          test "$(docker exec ct-unraid id -u)" = "99"

@@ -7,12 +7,15 @@ handful of rows per day, and it keeps the scheduler and web threads independent.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import median
+
+from .config import ConfigError
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS samples (
@@ -68,12 +71,67 @@ CREATE INDEX IF NOT EXISTS idx_api_calls_month ON api_calls (billing_month);
 LEGACY_ROUTES_TABLE = "routes"
 
 
+class StorageError(ConfigError):
+    """The database cannot be opened where it was asked to live.
+
+    A ConfigError, so the CLI reports it as the misconfiguration it is rather
+    than as a crash.
+    """
+
+
+def _who_owns(path: Path) -> str:
+    """``, owned by uid 99, gid 100``, or empty where the OS has no such notion."""
+    if not hasattr(os, "getuid"):  # Windows reports 0 for both; better to say nothing.
+        return ""
+    try:
+        info = path.stat()
+    except OSError:
+        return ""
+    return f", owned by uid {info.st_uid}, gid {info.st_gid}"
+
+
+def _unwritable(path: Path, blocker: Path, detail: str) -> StorageError:
+    # Only Unix has the uids that make this failure make sense; on Windows the
+    # clause would read as a sentence with its subject missing.
+    running_as = f" We are running as uid {os.getuid()}." if hasattr(os, "getuid") else ""
+    return StorageError(
+        f"""Cannot open the database at {path}.
+  {detail}{_who_owns(blocker)}.{running_as}
+  In Docker /data is a mount, so its ownership comes from the host, not from
+  the image. On Unraid /mnt/user/appdata is owned by nobody:users: put PUID=99
+  and PGID=100 in .env, then recreate the container.
+  Otherwise chown the directory to the user the container runs as, or point
+  DB_PATH somewhere writable."""
+    )
+
+
+def _ensure_writable(path: Path) -> None:
+    """Fail with an explanation, rather than sqlite3's 'unable to open database file'.
+
+    Called before the first connect because that error names neither the path,
+    nor the user, nor the permission that was missing -- which is the whole of
+    what you need to know to fix it.
+    """
+    directory = path.parent
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise _unwritable(
+            path, directory, f"{directory} could not be created ({exc.strerror})"
+        ) from exc
+    # An existing file must itself be writable; otherwise it is the directory
+    # that has to allow creating one.
+    target = path if path.exists() else directory
+    if not os.access(target, os.W_OK):
+        raise _unwritable(path, target, f"{target} is not writable")
+
+
 class Database:
     """All reads and writes against the sample store."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_writable(self.path)
         with self.connect() as conn:
             conn.executescript(SCHEMA)
 

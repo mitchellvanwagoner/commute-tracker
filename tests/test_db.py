@@ -2,7 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from commute_tracker.db import Database
+from commute_tracker.config import ConfigError
+from commute_tracker.db import Database, StorageError
 
 TZ = timezone(timedelta(hours=-8))
 
@@ -117,3 +118,36 @@ def test_samples_come_back_oldest_first(db):
         ("2026-01-06", "07:00"),
     ]
     assert rows[0]["static_duration_seconds"] == 540
+
+
+# ------------------------------------------------------- unwritable locations
+#
+# sqlite reports "unable to open database file" and names neither the path, the
+# user, nor the missing permission -- which on a NAS, where /data is a mount
+# owned by the host, is the whole of what you need to know. See _ensure_writable.
+
+
+def test_a_blocked_parent_directory_is_reported_with_the_path(tmp_path):
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("", encoding="utf-8")
+
+    with pytest.raises(StorageError) as caught:
+        Database(blocker / "sub" / "commutes.db")
+
+    message = str(caught.value)
+    assert str(blocker) in message
+    assert "PUID" in message, "the message must name the fix on Unraid"
+
+
+def test_a_storage_error_is_a_config_error(tmp_path):
+    """So the CLI reports it as a misconfiguration rather than as a crash."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("", encoding="utf-8")
+
+    with pytest.raises(ConfigError):
+        Database(blocker / "commutes.db")
+
+
+def test_a_missing_parent_directory_is_created(tmp_path):
+    db = Database(tmp_path / "nested" / "deeper" / "commutes.db")
+    assert db.path.exists()

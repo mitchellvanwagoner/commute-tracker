@@ -172,6 +172,12 @@ usual causes, in the order they bite:
   with `GOOGLE_MAPS_API_KEY is not set`. Visible only in `docker logs`.
 * **`HOST` set to the server's LAN IP.** Fails to bind and exits; see the
   warning in `.env.example`.
+* **`/data` not writable by the container.** A sqlite traceback ending in
+  `unable to open database file`. It happens when a host directory is
+  bind-mounted at `/data`, because its ownership is the host's: Unraid's
+  `/mnt/user/appdata` is `nobody:users`, and this image defaults to uid 1000.
+  Set `PUID=99` and `PGID=100` in `.env` and recreate the container. The app
+  now reports this in full rather than letting sqlite's version of it through.
 * **The host port already in use.** Compose says so and creates nothing; change
   `PORT` in `.env`.
 

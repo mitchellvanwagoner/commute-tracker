@@ -24,6 +24,11 @@ services:
     volumes:
       # Holds both the database and routes.yml, so routes added in the
       # dashboard survive a rebuild or a reboot.
+      #
+      # To keep the data somewhere you can browse instead, swap in a host path
+      # (on Unraid: /mnt/user/appdata/commute-tracker:/data) and set PUID/PGID
+      # in .env to that directory's owner -- 99:100 for Unraid appdata.
+      # Ownership there is the host's, and the container must be able to write.
       - commute-data:/data
     environment:
       # These are pinned deliberately, and override anything in .env.

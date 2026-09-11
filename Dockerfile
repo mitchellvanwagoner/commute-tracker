@@ -19,7 +19,13 @@ COPY commute_tracker ./commute_tracker
 
 # The database lives on a volume so history survives image rebuilds.
 RUN mkdir -p /data && useradd --create-home --uid 1000 tracker && chown -R tracker /data /app
-USER tracker
+
+# The entrypoint drops to PUID:PGID (default 1000:1000) before starting the app,
+# so a host directory owned by anyone can be mounted at /data. setpriv is what
+# performs the drop -- fail the build, not the container, if it ever goes missing.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh && command -v setpriv > /dev/null
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 VOLUME ["/data"]
 EXPOSE 8080
