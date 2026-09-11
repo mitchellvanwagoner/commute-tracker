@@ -147,6 +147,34 @@ hiding the actual problem. Two real causes, both reported as the pull error:
 * **`manifest unknown`** — the tag does not exist. `latest` only appears once a
   release has been tagged; before that, use `:main`.
 
+## When it will not start
+
+Unraid's Compose Manager pane frequently shows nothing useful, and "no logs at
+all" is itself a clue: it usually means no container was ever created, so there
+is nothing to have logged. Over SSH, in the directory holding the compose file
+(`/boot/config/plugins/compose.manager/projects/<stack>/` on Unraid):
+
+```bash
+ls -la                  # is .env actually next to docker-compose.yml?
+docker compose config   # resolved file, or the error that stops it being read
+docker compose up       # no -d: the real error goes to your terminal
+docker compose ps -a    # "Restarting" is a crash loop, "Created" never started
+docker logs commute-tracker
+```
+
+`docker compose up` in the foreground is the one that ends the guessing. The
+usual causes, in the order they bite:
+
+* **No `.env` beside the compose file.** `env_file` is mandatory, so compose
+  aborts before creating the container — hence no logs anywhere. Copy
+  `.env.example` to `.env` in that directory.
+* **`GOOGLE_MAPS_API_KEY` empty.** The container starts, then exits immediately
+  with `GOOGLE_MAPS_API_KEY is not set`. Visible only in `docker logs`.
+* **`HOST` set to the server's LAN IP.** Fails to bind and exits; see the
+  warning in `.env.example`.
+* **The host port already in use.** Compose says so and creates nothing; change
+  `PORT` in `.env`.
+
 ## Daily push notification
 
 At a time you choose, the tracker pushes that day's commute to your phone: how
