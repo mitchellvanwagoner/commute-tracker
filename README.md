@@ -70,7 +70,11 @@ docker compose pull && docker compose up -d
 
 That pulls the prebuilt image from GitHub Container Registry. To build from this
 checkout instead — after a local change, or on an architecture with no published
-image — use `docker compose up -d --build`.
+image — overlay the build file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 Open <http://localhost:8080>. A fresh install has **no routes** — the dashboard
 comes up empty with an **Add a route** button, which is where you enter the two
@@ -91,7 +95,7 @@ docker pull ghcr.io/mitchellvanwagoner/commute-tracker:latest
 | --- | --- |
 | `latest` | The newest release tag |
 | `main` | The newest commit on `main` |
-| `v0.1.0`, `v0.1`, `v0` | A release, and the moving aliases that follow it |
+| `0.1.0`, `0.1`, `0` | A release (from the `v0.1.0` git tag), and the moving aliases that follow it |
 | `sha-<short sha>` | One exact commit, for pinning |
 
 `latest` deliberately tracks releases rather than `main`, so a pull never lands on
@@ -115,6 +119,22 @@ version tags and moves `latest`:
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
+
+### Deploying on a host without the repository
+
+`docker-compose.yml` has no `build:` section on purpose, so it is the only file a
+deployment host needs — Unraid, a NAS, anything that never cloned this repo. Copy
+it and a `.env` next to each other and `docker compose up -d`.
+
+That also keeps failures honest. With a `build:` present, a pull that fails does
+not stop the run: compose falls back to building and reports a missing Dockerfile,
+hiding the actual problem. Two real causes, both reported as the pull error:
+
+* **`unauthorized`** — the package is private (see above) and the host has not run
+  `docker login ghcr.io`. Unraid does not share a login with the web UI; run it
+  once over SSH as root, and the token is kept in `/root/.docker/config.json`.
+* **`manifest unknown`** — the tag does not exist. `latest` only appears once a
+  release has been tagged; before that, use `:main`.
 
 ## Daily push notification
 

@@ -1,10 +1,16 @@
 services:
   commute-tracker:
     # The prebuilt image from GitHub Container Registry, published by
-    # .github/workflows/publish.yml. `docker compose pull` fetches it; `docker
-    # compose up --build` ignores it and builds from this checkout instead.
+    # .github/workflows/publish.yml.
+    #
+    # Deliberately no `build:` key. This file is meant to run on a host that has
+    # the compose file and nothing else -- Unraid, a NAS, any box that never
+    # cloned the repo. With a `build:` present, a failed pull does not stop:
+    # compose quietly falls back to building and dies on the missing Dockerfile,
+    # which buries the real error (the pull) under a confusing one.
+    #
+    # To build from source instead, overlay docker-compose.build.yml.
     image: ghcr.io/mitchellvanwagoner/commute-tracker:latest
-    build: .
     container_name: commute-tracker
     restart: unless-stopped
     env_file:
