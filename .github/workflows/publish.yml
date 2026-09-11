@@ -1,0 +1,78 @@
+name: Publish image
+
+# Builds the container and pushes it to GitHub Container Registry, so an install
+# can `docker pull` a prebuilt image instead of building from source.
+#
+# Tags pushed:
+#   main       every commit to main -- the rolling build
+#   vX.Y.Z     a release tag, plus the moving X.Y / X aliases and `latest`
+#   sha-<sha>  every build, for pinning to an exact commit
+#
+# No secrets to configure: GITHUB_TOKEN authenticates to ghcr.io.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  # Pull requests build but do not push, so a PR cannot publish an image.
+  pull_request:
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      # QEMU lets the amd64 runner also produce the arm64 image, which is what a
+      # Raspberry Pi or an Apple Silicon Mac pulls.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+          # `latest` tracks releases, not main, so pulling it never lands on an
+          # untagged commit.
+          flavor: latest=false
+          labels: |
+            org.opencontainers.image.title=commute-tracker
+            org.opencontainers.image.description=Track and graph Google Maps driving times for a commute over a daily window
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Tag the release as latest
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:latest" \
+            "$IMAGE:${GITHUB_REF_NAME#v}"

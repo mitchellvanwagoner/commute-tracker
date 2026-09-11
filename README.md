@@ -65,14 +65,44 @@ port, how reports are scored, notifier credentials. **It holds no route data.**
 ### 3. Run
 
 ```bash
-docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
+
+That pulls the prebuilt image from GitHub Container Registry. To build from this
+checkout instead — after a local change, or on an architecture with no published
+image — use `docker compose up -d --build`.
 
 Open <http://localhost:8080>. A fresh install has **no routes** — the dashboard
 comes up empty with an **Add a route** button, which is where you enter the two
 addresses and the window you want tracked. **Test addresses** in the editor does
 a live lookup without saving, so you can confirm the addresses resolve and the
 API key works before committing.
+
+## Prebuilt images
+
+Every commit to `main` is built for `linux/amd64` and `linux/arm64` and pushed to
+GitHub Container Registry, so there is nothing to compile on the host:
+
+```bash
+docker pull ghcr.io/mitchellvanwagoner/commute-tracker:latest
+```
+
+| Tag | Points at |
+| --- | --- |
+| `latest` | The newest release tag |
+| `main` | The newest commit on `main` |
+| `v0.1.0`, `v0.1`, `v0` | A release, and the moving aliases that follow it |
+| `sha-<short sha>` | One exact commit, for pinning |
+
+`latest` deliberately tracks releases rather than `main`, so a pull never lands on
+an untagged commit. The package is public; no `docker login` is needed to pull it.
+
+To cut a release, tag a commit and push the tag — the workflow publishes the
+version tags and moves `latest`:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
 
 ## Daily push notification
 
@@ -228,6 +258,13 @@ must not silence the other or take the scheduler down.
 
 ## Upgrading from an earlier version
 
+To move to a newer build, pull and recreate. The database and `routes.yml` live
+on the `commute-data` volume, so history and routes are untouched:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
 An install whose routes were stored in the database migrates itself: on first
 start the routes are written out to `routes.yml` and the old table is dropped.
 Nothing is lost and there is nothing to do.
@@ -238,6 +275,13 @@ Nothing is lost and there is nothing to do.
 pip install -r requirements-dev.txt
 pytest -q
 ruff check .
+```
+
+To run the container against the working tree, with uvicorn reloading on edit and
+the database in `./data` rather than in a volume:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
 ## License

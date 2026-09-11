@@ -1,7 +1,10 @@
 services:
   commute-tracker:
+    # The prebuilt image from GitHub Container Registry, published by
+    # .github/workflows/publish.yml. `docker compose pull` fetches it; `docker
+    # compose up --build` ignores it and builds from this checkout instead.
+    image: ghcr.io/mitchellvanwagoner/commute-tracker:latest
     build: .
-    image: commute-tracker:latest
     container_name: commute-tracker
     restart: unless-stopped
     env_file:
