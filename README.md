@@ -70,10 +70,12 @@ docker compose pull && docker compose up -d
 
 That pulls the prebuilt image from GitHub Container Registry. To build from this
 checkout instead — after a local change, or on an architecture with no published
-image — overlay the build file:
+image — build under the name the compose file already refers to, and it will be
+used in place of the published image:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+docker build -t ghcr.io/mitchellvanwagoner/commute-tracker:latest .
+docker compose up -d
 ```
 
 Open <http://localhost:8080>. A fresh install has **no routes** — the dashboard
@@ -122,7 +124,7 @@ git tag v0.1.0 && git push origin v0.1.0
 
 ### Deploying on a host without the repository
 
-`docker-compose.yml` has no `build:` section on purpose, so it is the only file a
+There is one compose file and it has no `build:` section, so it is the only file a
 deployment host needs — Unraid, a NAS, anything that never cloned this repo. Copy
 it and a `.env` next to each other and `docker compose up -d`.
 
@@ -309,12 +311,15 @@ pytest -q
 ruff check .
 ```
 
-To run the container against the working tree, with uvicorn reloading on edit and
-the database in `./data` rather than in a volume:
+For an edit-reload loop, run it outside the container — see
+[Running without Docker](#running-without-docker) — and add `--reload`:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+.venv/bin/python -m uvicorn commute_tracker.web.app:create_app --factory --reload --port 8080
 ```
+
+That keeps the database in `./data`, where it can be inspected and thrown away
+like any other local file.
 
 ## License
 

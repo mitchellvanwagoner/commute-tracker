@@ -9,7 +9,8 @@ services:
     # compose quietly falls back to building and dies on the missing Dockerfile,
     # which buries the real error (the pull) under a confusing one.
     #
-    # To build from source instead, overlay docker-compose.build.yml.
+    # To run a local build instead, build it under this same name and compose
+    # will use it: docker build -t ghcr.io/mitchellvanwagoner/commute-tracker .
     image: ghcr.io/mitchellvanwagoner/commute-tracker:latest
     container_name: commute-tracker
     restart: unless-stopped
