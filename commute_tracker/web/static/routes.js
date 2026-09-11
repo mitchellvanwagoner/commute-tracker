@@ -57,6 +57,7 @@ const Routes = (() => {
             : '<span class="tag off">paused</span>';
         const actions = editable
           ? `<button class="link" data-edit="${route.id}">Edit</button>
+             <button class="link" data-copy="${route.id}" title="Add the return leg of this commute">Copy reversed</button>
              <button class="link" data-toggle="${route.id}">${route.enabled ? "Pause" : "Resume"}</button>
              <button class="link danger" data-delete="${route.id}">Delete</button>`
           : `<button class="link danger" data-delete="${route.id}">Delete data</button>`;
@@ -87,6 +88,11 @@ const Routes = (() => {
         openEditor(routes.find((r) => r.id === button.dataset.edit))
       );
     });
+    el("routes-table").querySelectorAll("[data-copy]").forEach((button) => {
+      button.addEventListener("click", () =>
+        openEditor(routes.find((r) => r.id === button.dataset.copy), { duplicate: true })
+      );
+    });
     el("routes-table").querySelectorAll("[data-toggle]").forEach((button) => {
       button.addEventListener("click", async () => {
         const route = routes.find((r) => r.id === button.dataset.toggle);
@@ -112,12 +118,23 @@ const Routes = (() => {
 
   // ------------------------------------------------------------------ editor
 
-  function openEditor(route) {
-    editing = route ?? null;
+  /** Open the editor.
+   *
+   * ``duplicate`` opens a *new* route pre-filled from an existing one with the
+   * addresses reversed, which is almost always what copying a commute is for:
+   * the same trip, the other way, later in the day. It deliberately does not
+   * carry the id -- the copy has to collect its own history.
+   */
+  function openEditor(route, { duplicate = false } = {}) {
+    editing = duplicate ? null : (route ?? null);
     const form = el("route-form");
     form.reset();
-    el("editor-title").textContent = route ? "Edit route" : "Add a route";
-    el("route-delete").hidden = !route;
+    el("editor-title").textContent = duplicate
+      ? "Copy route (reversed)"
+      : route
+        ? "Edit route"
+        : "Add a route";
+    el("route-delete").hidden = duplicate || !route;
     setTestResult("");
 
     const defaults = {
@@ -132,7 +149,18 @@ const Routes = (() => {
       days: ["mon", "tue", "wed", "thu", "fri"],
       enabled: true,
     };
-    const values = { ...defaults, ...(route || {}) };
+    const source = route || {};
+    const values = {
+      ...defaults,
+      ...source,
+      ...(duplicate
+        ? {
+            name: `${source.name ?? "Commute"} (return)`,
+            origin: source.destination ?? "",
+            destination: source.origin ?? "",
+          }
+        : {}),
+    };
     for (const field of ["name", "origin", "destination", "window_start", "window_end",
                          "interval_minutes", "timezone", "notify_at"]) {
       form.elements[field].value = values[field] ?? "";
@@ -145,6 +173,7 @@ const Routes = (() => {
 
     el("route-editor").showModal();
     form.elements.name.focus();
+    refreshCost();
   }
 
   function readForm() {
@@ -164,6 +193,80 @@ const Routes = (() => {
     };
   }
 
+  // ---------------------------------------------------------- address lookup
+
+  /** Fill a field's datalist with suggestions for what has been typed so far.
+   *
+   * Debounced, because the provider is a shared free service (and, if someone
+   * has switched it to Google, a metered one): a request per keystroke would be
+   * rude in the first case and expensive in the second. Failures are swallowed
+   * -- suggestions are a convenience, and the field still takes free text.
+   */
+  const suggestTimers = {};
+  const suggestCache = new Map();
+
+  function attachAddressLookup(fieldName, datalistId) {
+    const input = el("route-form").elements[fieldName];
+    const list = el(datalistId);
+
+    input.addEventListener("input", () => {
+      const query = input.value.trim();
+      clearTimeout(suggestTimers[fieldName]);
+      if (query.length < 3) {
+        list.innerHTML = "";
+        return;
+      }
+      suggestTimers[fieldName] = setTimeout(async () => {
+        try {
+          let options = suggestCache.get(query);
+          if (!options) {
+            const result = await api(`/api/addresses?q=${encodeURIComponent(query)}`);
+            options = result.suggestions || [];
+            // Bounded so a long editing session cannot grow without limit.
+            if (suggestCache.size > 50) suggestCache.clear();
+            suggestCache.set(query, options);
+          }
+          list.innerHTML = options
+            .map((address) => `<option value="${escapeHtml(address)}"></option>`)
+            .join("");
+        } catch {
+          list.innerHTML = "";
+        }
+      }, 350);
+    });
+  }
+
+  /** Swap From and To -- the fast path to the return leg of the same commute. */
+  function swapAddresses() {
+    const form = el("route-form");
+    const { origin, destination } = form.elements;
+    [origin.value, destination.value] = [destination.value, origin.value];
+    setTestResult("");
+  }
+
+  /** Cost the route being edited, before it is committed. Spends no API calls. */
+  async function refreshCost() {
+    const node = el("route-cost");
+    const payload = readForm();
+    if (!payload.origin || !payload.destination) payload.origin = payload.destination = "preview";
+    try {
+      const preview = await api("/api/routes/preview", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, id: editing?.id ?? "" }),
+      });
+      const perMonth = preview.calls_per_month.toLocaleString();
+      node.textContent =
+        `${preview.samples_per_day} samples/day · about ${perMonth} Routes API calls a month.` +
+        (preview.warning ? ` ${preview.warning}` : "");
+      node.className = preview.warning ? "route-cost warn" : "route-cost";
+    } catch {
+      // An incomplete or invalid form has nothing meaningful to cost yet; the
+      // save path reports the validation error properly.
+      node.textContent = "";
+      node.className = "route-cost";
+    }
+  }
+
   function setTestResult(message, tone = "") {
     const node = el("route-test-result");
     node.textContent = message;
@@ -177,13 +280,19 @@ const Routes = (() => {
     const button = el("route-save");
     button.disabled = true;
     try {
-      if (editing) {
-        await api(`/api/routes/${editing.id}`, { method: "PATCH", body: JSON.stringify(payload) });
-      } else {
-        await api("/api/routes", { method: "POST", body: JSON.stringify(payload) });
-      }
+      const saved = editing
+        ? await api(`/api/routes/${editing.id}`, {
+            method: "PATCH",
+            body: JSON.stringify(payload),
+          })
+        : await api("/api/routes", { method: "POST", body: JSON.stringify(payload) });
       el("route-editor").close();
       Dashboard.reload();
+      // The route is saved either way -- but an overage must not slip past
+      // unseen just because the dialog closed.
+      if (saved?.warning) window.alert(`Heads up
+
+${saved.warning}`);
     } catch (error) {
       setTestResult(error.message, "bad");
     } finally {
@@ -238,6 +347,15 @@ const Routes = (() => {
 
   function init() {
     el("route-add").addEventListener("click", () => openEditor(null));
+    el("route-swap").addEventListener("click", swapAddresses);
+    attachAddressLookup("origin", "origin-options");
+    attachAddressLookup("destination", "destination-options");
+    for (const field of ["window_start", "window_end", "interval_minutes", "enabled"]) {
+      el("route-form").elements[field].addEventListener("change", refreshCost);
+    }
+    el("route-form")
+      .querySelectorAll("[name=days]")
+      .forEach((box) => box.addEventListener("change", refreshCost));
     el("route-form").addEventListener("submit", save);
     el("route-test").addEventListener("click", test);
     el("route-cancel").addEventListener("click", () => el("route-editor").close());

@@ -24,6 +24,16 @@ class MapsError(RuntimeError):
     """A lookup against the Routes API failed."""
 
 
+class BudgetExceededError(MapsError):
+    """The month's Routes API allowance is spent, so no call was made.
+
+    Deliberately a :class:`MapsError`: every caller already treats one of those
+    as "no measurement this time", which is exactly the right behaviour here --
+    the sample is skipped and the reason is recorded, rather than the scheduler
+    dying or the bill quietly growing.
+    """
+
+
 @dataclass(frozen=True)
 class TravelTime:
     """One driving-time measurement."""
@@ -90,13 +100,33 @@ class RoutesClient:
         *,
         timeout: float = 20.0,
         traffic_model: str = "TRAFFIC_AWARE",
+        budget=None,
     ):
         self._api_key = api_key
         self._traffic_model = traffic_model
         self._client = httpx.AsyncClient(timeout=timeout)
+        # A CallBudget, or None to leave the meter off entirely (tests do this).
+        self._budget = budget
 
-    async def travel_time(self, origin: str, destination: str) -> TravelTime:
-        """Look up the current driving time between two addresses."""
+    async def travel_time(
+        self, origin: str, destination: str, *, kind: str = "sample", route_id: str | None = None
+    ) -> TravelTime:
+        """Look up the current driving time between two addresses.
+
+        Refuses to spend a call once the monthly budget is gone. The check is
+        here rather than in the callers so that every path to the Routes API --
+        scheduled sampling, a manual sample, the editor's Test button -- is
+        covered by one gate that cannot be forgotten.
+        """
+        if self._budget is not None and self._budget.exhausted():
+            raise BudgetExceededError(
+                f"Monthly Routes API budget reached "
+                f"({self._budget.used()}/{self._budget.limit} calls for "
+                f"{self._budget.billing_month()}); no call was made. Sampling resumes next "
+                f"billing month, or raise FREE_TIER_CALLS_PER_MONTH to keep going and pay "
+                f"for the overage."
+            )
+
         try:
             response = await self._client.post(
                 ROUTES_URL,
@@ -108,7 +138,16 @@ class RoutesClient:
                 },
             )
         except httpx.HTTPError as exc:
+            # Never reached Google, so nothing was billed and the meter stays put.
             raise MapsError(f"Could not reach the Routes API: {exc}") from exc
+
+        # The request reached Google, so count it. Errors are counted too: it is
+        # better to stop slightly early than to discover the meter was under-
+        # reporting when the invoice arrives.
+        if self._budget is not None:
+            self._budget.record(
+                kind=kind, route_id=route_id, ok=response.status_code == httpx.codes.OK
+            )
 
         if response.status_code != httpx.codes.OK:
             detail = response.text.strip()[:500]

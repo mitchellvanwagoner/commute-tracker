@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
+from .usage import BILLING_TIMEZONE, FREE_TIER_CALLS
+
 load_dotenv()
 
 DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -24,6 +26,36 @@ _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 
 class ConfigError(ValueError):
     """Raised when the configuration is missing or malformed."""
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    """Read an integer setting, naming the variable when it is unreadable.
+
+    Bare ``int(os.getenv(...))`` at module scope raises a ValueError with no
+    hint of which variable is at fault, during import, where nothing can catch
+    it -- the container just dies on a traceback.
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a whole number, got {raw!r}") from exc
+
+
+# Cost guards. Every sample is a billed Routes API call, so a slip in the route
+# editor -- a 1 where 15 was meant -- multiplies the monthly bill fifteenfold
+# with nothing to show for it: traffic does not move fast enough for minute-by-
+# minute sampling to say anything the 5-minute one does not. The limits are
+# deliberately generous, and both can be raised from the environment: they exist
+# to catch a mistake, not to overrule a deliberate choice.
+#
+# They gate what may be *created* (see Route.cost_guard_error), never what may
+# be loaded, so tightening one cannot strand an install on a routes.yml it can
+# no longer parse.
+MIN_INTERVAL_MINUTES = _env_int("MIN_INTERVAL_MINUTES", 5)
+MAX_SAMPLES_PER_DAY = _env_int("MAX_SAMPLES_PER_DAY", 120)
 
 
 def parse_time(value: str | time) -> time:
@@ -88,6 +120,38 @@ class Route:
             ZoneInfo(self.timezone)
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ConfigError(f"[{self.name}] unknown timezone {self.timezone!r}") from exc
+
+    def calls_per_month(self) -> int:
+        """Billed Routes API calls a full month of this route's schedule would make."""
+        return len(self.sample_times()) * len(self.days) * 52 // 12
+
+    def cost_guard_error(self) -> str | None:
+        """Why this schedule is too expensive to accept, or None if it is fine.
+
+        Returned rather than raised, and checked on the *write* path only. These
+        are a policy about what may be created, not a statement about whether a
+        Route is coherent: enforcing them in ``__post_init__`` would also run
+        them on load, so an existing ``routes.yml`` written before the limits
+        existed would fail to parse and take the whole install down with it --
+        including the dashboard that is the only place to fix the offending
+        route.
+        """
+        if self.interval_minutes < MIN_INTERVAL_MINUTES:
+            return (
+                f"[{self.name}] interval_minutes must be >= {MIN_INTERVAL_MINUTES}; "
+                f"got {self.interval_minutes}. Every sample is a paid Routes API call, "
+                f"and traffic does not change fast enough for a shorter gap to tell you "
+                f"anything new. Raise MIN_INTERVAL_MINUTES if you really mean it."
+            )
+        samples = len(self.sample_times())
+        if samples > MAX_SAMPLES_PER_DAY:
+            return (
+                f"[{self.name}] this window would take {samples} samples a day, over the "
+                f"{MAX_SAMPLES_PER_DAY}/day limit -- roughly "
+                f"{self.calls_per_month()} paid Routes API calls a month. "
+                f"Widen interval_minutes, shorten the window, or raise MAX_SAMPLES_PER_DAY."
+            )
+        return None
 
     @property
     def tzinfo(self) -> ZoneInfo:
@@ -199,6 +263,13 @@ class Settings:
     port: int = 8080
     traffic_model: str = "TRAFFIC_AWARE"
     request_timeout: float = 20.0
+    # The monthly Routes API call ceiling. Defaults to Google's free allowance
+    # for the Compute Routes Pro SKU; 0 means no ceiling at all.
+    free_tier_calls: int = FREE_TIER_CALLS
+    billing_timezone: str = BILLING_TIMEZONE
+    # Address suggestions in the route editor: "photon" (free, no key),
+    # "google" (Places API, billed), or "off".
+    address_provider: str = "photon"
     notify: NotifySettings = field(default_factory=NotifySettings)
     extras: dict = field(default_factory=dict)
 
@@ -224,6 +295,9 @@ def load_settings() -> Settings:
         port=int(os.getenv("PORT", "8080")),
         traffic_model=os.getenv("TRAFFIC_MODEL", "TRAFFIC_AWARE"),
         request_timeout=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20")),
+        free_tier_calls=_env_int("FREE_TIER_CALLS_PER_MONTH", FREE_TIER_CALLS, minimum=0),
+        billing_timezone=os.getenv("BILLING_TIMEZONE", BILLING_TIMEZONE),
+        address_provider=os.getenv("ADDRESS_PROVIDER", "photon"),
         notify=NotifySettings(
             baseline_days=int(os.getenv("NOTIFY_BASELINE_DAYS", "30")),
             min_baseline_days=int(os.getenv("NOTIFY_MIN_BASELINE_DAYS", "5")),

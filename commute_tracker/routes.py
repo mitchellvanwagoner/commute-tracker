@@ -127,6 +127,7 @@ class RouteStore:
             route = Route.from_dict(
                 {**data, "id": _allocate_id(data.get("name") or "commute", taken)}
             )
+            _reject_if_too_expensive(route)
             routes.append(route)
             self._write(routes)
         log.info("[%s] route created: %s -> %s", route.id, route.origin, route.destination)
@@ -141,6 +142,7 @@ class RouteStore:
                 raise LookupError(route_id)
             merged = {**routes[index].as_dict(), **_clean(payload), "id": route_id}
             route = Route.from_dict(merged)
+            _reject_if_too_expensive(route)
             routes[index] = route
             self._write(routes)
         log.info("[%s] route updated", route_id)
@@ -220,6 +222,19 @@ def _to_yaml(route: Route) -> dict:
     if route.notify_days:
         entry["notify_days"] = ",".join(route.notify_days)
     return entry
+
+
+def _reject_if_too_expensive(route: Route) -> None:
+    """Apply the cost guards, which gate writes only.
+
+    Deliberately not enforced when a route is *loaded*: a routes.yml written
+    before a limit existed (or before it was tightened) must keep working, or
+    lowering MIN_INTERVAL_MINUTES would brick the install and take the dashboard
+    that is the only place to fix it down too.
+    """
+    problem = route.cost_guard_error()
+    if problem:
+        raise ConfigError(problem)
 
 
 def _allocate_id(name: str, taken: set[str]) -> str:

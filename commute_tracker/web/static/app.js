@@ -187,17 +187,63 @@ function renderFailures(failures) {
     return;
   }
   card.hidden = false;
+  // Escaped: the message embeds up to 500 characters of a third-party HTTP
+  // response body, which has no business being trusted as markup.
   $("failures").innerHTML = failures
     .map(
       (f) =>
-        `<p class="failure-row"><span class="when">${f.local_date} ${f.local_time}</span>${f.message}</p>`
+        `<p class="failure-row"><span class="when">${escapeHtml(f.local_date)} ${escapeHtml(
+          f.local_time
+        )}</span>${escapeHtml(f.message)}</p>`
     )
     .join("");
 }
 
+/** The month's Routes API meter: how much of the free tier is gone. */
+function renderUsage(usage) {
+  const card = $("usage-card");
+  if (!card) return;
+  if (!usage || usage.unlimited) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const pct = usage.limit ? Math.min(100, (usage.used / usage.limit) * 100) : 0;
+  const bar = $("usage-bar");
+  bar.style.width = `${pct}%`;
+  bar.className = usage.exhausted ? "bar stop" : usage.projected_over_by ? "bar warn" : "bar";
+
+  $("usage-text").textContent =
+    `${usage.used.toLocaleString()} of ${usage.limit.toLocaleString()} free calls used ` +
+    `this month (${usage.billing_month})`;
+
+  const note = $("usage-note");
+  if (usage.exhausted) {
+    note.textContent =
+      "Allowance spent — sampling is paused until next billing month. No further API calls " +
+      "will be made.";
+    note.className = "usage-note bad";
+  } else if (usage.projected_over_by) {
+    note.textContent =
+      `On the current schedule this month will end at about ` +
+      `${usage.projected_month_end.toLocaleString()} calls — ` +
+      `${usage.projected_over_by.toLocaleString()} over the free tier.`;
+    note.className = "usage-note warn";
+  } else {
+    note.textContent =
+      `Projected ${usage.projected_month_end.toLocaleString()} by month end, ` +
+      `within the free tier.`;
+    note.className = "usage-note";
+  }
+}
+
 async function refresh() {
-  const stats = await getJSON(`/api/stats?${queryString()}`);
+  const [stats, usage] = await Promise.all([
+    getJSON(`/api/stats?${queryString()}`),
+    getJSON("/api/usage").catch(() => null),
+  ]);
   state.stats = stats;
+  renderUsage(usage);
   $("csv-link").href = `/api/samples.csv?${queryString()}`;
   renderSummary(stats.summary);
   renderReport(stats.report);
@@ -234,6 +280,9 @@ function escapeHtml(value) {
 
 /** Blank out the charts and stats when there is no route to show. */
 function showEmptyState() {
+  getJSON("/api/usage")
+    .then(renderUsage)
+    .catch(() => {});
   $("route-line").textContent = "No routes yet \u2014 add one below to start tracking a commute.";
   $("hero-value").textContent = "\u2014";
   $("hero-sub").textContent = "";

@@ -16,13 +16,39 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..config import ConfigError, Settings, load_settings
+from ..config import ConfigError, Route, Settings, load_settings
+from ..geocode import GeocodeError
 from ..maps import MapsError
+from ..routes import EDITABLE
 from ..tracker import CommuteTracker
 
 log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class _RevalidatingStatic(StaticFiles):
+    """Serve static files with ``Cache-Control: no-cache``.
+
+    Starlette sends ETag and Last-Modified but no Cache-Control, which leaves a
+    browser free to apply heuristic freshness -- caching an asset for a stretch
+    proportional to its age and never asking whether it changed. The result is a
+    dashboard running last edit's JavaScript with no indication anything is
+    stale, which is a genuinely awful thing to debug.
+
+    ``no-cache`` does not mean "do not cache": it means "revalidate first", and
+    the ETag already there answers that with a cheap 304 when nothing changed.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+def _clean_preview(payload: dict) -> dict:
+    """Keep only the fields a Route is built from, so a stray key is a 400 not a 500."""
+    return {key: value for key, value in payload.items() if key in EDITABLE}
 
 
 def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) -> FastAPI:
@@ -99,7 +125,9 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         except ConfigError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         tracker.reschedule_route(route.id)
-        return route.as_dict()
+        # The route is saved either way -- the spend is the user's call to make.
+        # What must not happen is it being made without the number in front of them.
+        return {**route.as_dict(), "warning": tracker.overage_warning()}
 
     @app.patch("/api/routes/{route_id}")
     async def api_update_route(route_id: str, payload: dict):
@@ -111,7 +139,7 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         except ConfigError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         tracker.reschedule_route(route.id)
-        return route.as_dict()
+        return {**route.as_dict(), "warning": tracker.overage_warning()}
 
     @app.delete("/api/routes/{route_id}")
     async def api_delete_route(route_id: str, drop_history: bool = False):
@@ -126,6 +154,48 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         tracker.reschedule_route(route_id)
         return {"deleted": route_id, "history_dropped": drop_history}
 
+    @app.get("/api/usage")
+    async def api_usage():
+        """The month's Routes API meter, projected forward at the current schedule."""
+        return tracker.usage()
+
+    @app.post("/api/routes/preview")
+    async def api_preview_route(payload: dict):
+        """Cost a route before it is saved. Spends nothing -- pure arithmetic.
+
+        This is what lets the editor warn *before* the commitment rather than
+        after, which is the only point at which the warning is still actionable.
+        """
+        route_id = str(payload.pop("id", "") or "").strip()
+        try:
+            fields = {**_clean_preview(payload), "id": route_id or "__preview__"}
+            candidate = Route.from_dict(fields)
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "samples_per_day": len(candidate.sample_times()),
+            "calls_per_month": candidate.calls_per_month(),
+            "warning": tracker.overage_warning(candidate),
+            "usage": tracker.usage(),
+        }
+
+    @app.get("/api/addresses")
+    async def api_addresses(q: str = Query(default="", max_length=200)):
+        """Address suggestions for the editor. Free unless the provider is Google.
+
+        A failure here is never an error the user must act on -- the address box
+        still accepts anything typed into it -- so a dead provider returns an
+        empty list rather than a status the editor would have to handle.
+        """
+        try:
+            return {
+                "provider": tracker.suggester.provider,
+                "suggestions": await tracker.suggest_addresses(q),
+            }
+        except GeocodeError as exc:
+            log.warning("address lookup failed: %s", exc)
+            return {"provider": tracker.suggester.provider, "suggestions": [], "error": str(exc)}
+
     @app.post("/api/routes/validate")
     async def api_validate_route(payload: dict):
         """Look up two addresses without saving anything.
@@ -138,7 +208,7 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         if not origin or not destination:
             raise HTTPException(status_code=400, detail="Both addresses are required")
         try:
-            travel = await tracker.client.travel_time(origin, destination)
+            travel = await tracker.client.travel_time(origin, destination, kind="validate")
         except MapsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
@@ -234,7 +304,7 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
 
     @app.get("/")
     async def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", _RevalidatingStatic(directory=STATIC_DIR), name="static")
     return app

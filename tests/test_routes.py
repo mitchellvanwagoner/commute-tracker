@@ -305,3 +305,42 @@ def test_an_evening_window_survives_the_round_trip(store, path):
     reloaded = RouteStore(path).get("evening-commute")
     assert reloaded.window_start == time(16, 30)
     assert reloaded.window_end == time(18, 30)
+
+
+# --------------------------------------------------------------- cost guards
+#
+# The guards gate writes only: Route itself merely reports a problem, so that a
+# routes.yml written before a limit existed keeps loading. See
+# Route.cost_guard_error.
+
+
+def test_create_refuses_an_interval_below_the_floor(store, path):
+    with pytest.raises(ConfigError, match="interval_minutes must be >= 5"):
+        store.create({**BASE, "interval_minutes": 1})
+    assert not path.exists()
+
+
+def test_create_refuses_a_window_with_too_many_samples(store, path):
+    with pytest.raises(ConfigError, match="samples a day"):
+        store.create(
+            {**BASE, "window_start": "00:00", "window_end": "23:55", "interval_minutes": 5}
+        )
+    assert not path.exists()
+
+
+def test_update_refuses_an_interval_below_the_floor_and_keeps_the_old_route(store):
+    store.create(BASE)
+    with pytest.raises(ConfigError, match="interval_minutes must be >= 5"):
+        store.update("morning-commute", {"interval_minutes": 1})
+    assert store.get("morning-commute").interval_minutes == 15
+
+
+def test_an_over_budget_route_already_on_disk_still_loads(path):
+    """Tightening a limit must not brick the dashboard that is the only way to fix it."""
+    path.write_text(
+        yaml.safe_dump({"routes": [{**BASE, "id": "legacy", "interval_minutes": 1}]}),
+        encoding="utf-8",
+    )
+    route = RouteStore(path).get("legacy")
+    assert route is not None
+    assert route.cost_guard_error() is not None

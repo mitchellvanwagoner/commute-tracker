@@ -17,10 +17,12 @@ from apscheduler.triggers.cron import CronTrigger
 
 from .config import Route, Settings
 from .db import Database
-from .maps import MapsError, RoutesClient
+from .geocode import AddressSuggester
+from .maps import BudgetExceededError, MapsError, RoutesClient
 from .notify import Notifier, deliver, notifiers_from_env
 from .report import Report, build_report
 from .routes import RouteStore
+from .usage import FREE_TIER_AUTOCOMPLETE, PLACES_KINDS, CallBudget
 
 log = logging.getLogger(__name__)
 
@@ -36,10 +38,30 @@ class CommuteTracker:
     ):
         self.settings = settings
         self.db = db or Database(settings.db_path)
+        self.budget = CallBudget(
+            self.db,
+            limit=settings.free_tier_calls,
+            timezone=settings.billing_timezone,
+        )
         self.client = RoutesClient(
             settings.api_key,
             timeout=settings.request_timeout,
             traffic_model=settings.traffic_model,
+            budget=self.budget,
+        )
+        self.suggester = AddressSuggester(
+            settings.address_provider,
+            api_key=settings.api_key,
+            timeout=settings.request_timeout,
+        )
+        # Only metered when the provider actually bills; Photon costs nothing,
+        # so counting it would put a meaningless number in front of the user.
+        self.places_budget = CallBudget(
+            self.db,
+            limit=FREE_TIER_AUTOCOMPLETE,
+            timezone=settings.billing_timezone,
+            kinds=PLACES_KINDS,
+            label="Places Autocomplete",
         )
         self.notifiers = notifiers_from_env() if notifiers is None else notifiers
         self.store = RouteStore(settings.routes_file)
@@ -62,7 +84,15 @@ class CommuteTracker:
         """Look up one driving time and store it. Returns the stored row, or None."""
         local_dt = datetime.now(route.tzinfo)
         try:
-            travel = await self.client.travel_time(route.origin, route.destination)
+            travel = await self.client.travel_time(
+                route.origin, route.destination, kind="sample", route_id=route.id
+            )
+        except BudgetExceededError as exc:
+            # Not a failure of the route -- the budget gate stopped it. Recorded
+            # all the same, so the gap in the chart carries its own explanation.
+            log.warning("[%s] sample skipped: %s", route.id, exc)
+            self.db.record_failure(route_id=route.id, local_dt=local_dt, message=str(exc))
+            return None
         except MapsError as exc:
             log.error("[%s] lookup failed: %s", route.id, exc)
             self.db.record_failure(route_id=route.id, local_dt=local_dt, message=str(exc))
@@ -141,7 +171,7 @@ class CommuteTracker:
                     timezone=route.tzinfo,
                 ),
                 args=[route],
-                id=f"{route.id}-{clock.strftime('%H%M')}",
+                id=f"{route.id}:{clock.strftime('%H%M')}",
                 replace_existing=True,
                 misfire_grace_time=120,
                 max_instances=1,
@@ -161,9 +191,16 @@ class CommuteTracker:
         self._schedule_digest(route)
 
     def unschedule_route(self, route_id: str) -> None:
-        """Drop every job belonging to a route (its ids are all prefixed with it)."""
+        """Drop every job belonging to a route.
+
+        Matched on the Route each job carries rather than on its id string. An
+        id prefix is not safe to match: ``_allocate_id`` hands out
+        ``morning-commute-2`` when ``morning-commute`` is taken, so a prefix
+        test would let one route's edit silently unschedule the other's jobs.
+        """
         for job in self.scheduler.get_jobs():
-            if job.id == f"{route_id}-digest" or job.id.startswith(f"{route_id}-"):
+            target = job.args[0] if job.args else None
+            if isinstance(target, Route) and target.id == route_id:
                 job.remove()
 
     def reschedule_route(self, route_id: str) -> None:
@@ -207,7 +244,7 @@ class CommuteTracker:
                 timezone=route.tzinfo,
             ),
             args=[route],
-            id=f"{route.id}-digest",
+            id=f"{route.id}:digest",
             replace_existing=True,
             misfire_grace_time=3600,
             max_instances=1,
@@ -224,14 +261,81 @@ class CommuteTracker:
         self.schedule()
         self.scheduler.start()
 
+    async def suggest_addresses(self, query: str) -> list[str]:
+        """Address suggestions for the editor, metered only if the provider bills."""
+        if not self.suggester.will_request(query):
+            # Too short, or the provider is off: no request goes out, so nothing
+            # may be booked against the allowance. Counting here would spend a
+            # budget the editor could not see being spent -- every keystroke
+            # below the minimum length would tick a meter Google never billed,
+            # and suggestions would eventually switch themselves off for calls
+            # that were never made.
+            return []
+        if self.suggester.is_billable and self.places_budget.exhausted():
+            return []
+        results = await self.suggester.suggest(query)
+        if self.suggester.is_billable:
+            self.places_budget.record(kind="autocomplete")
+        return results
+
     async def shutdown(self) -> None:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
         await self.client.aclose()
+        await self.suggester.aclose()
 
-    def estimated_calls_per_month(self) -> int:
+    def estimated_calls_per_month(self, routes: list[Route] | None = None) -> int:
         """Rough Routes API call count, for keeping an eye on billing."""
-        total = 0
-        for route in self.active_routes():
-            total += len(route.sample_times()) * len(route.days) * 52 // 12
-        return total
+        routes = self.active_routes() if routes is None else routes
+        return sum(route.calls_per_month() for route in routes)
+
+    def usage(self) -> dict:
+        """The month's meter reading, projected forward at the current schedule."""
+        return self.budget.snapshot(self.estimated_calls_per_month())
+
+    def overage_warning(self, pending: Route | None = None) -> str | None:
+        """Warn if the schedule -- with ``pending`` applied -- would run past the allowance.
+
+        ``pending`` is the route about to be saved. It replaces the stored
+        version of itself so an edit is costed as it will actually run, not
+        double-counted alongside the version it is replacing.
+        """
+        if self.budget.limit <= 0:
+            return None
+        routes = [r for r in self.active_routes() if pending is None or r.id != pending.id]
+        if pending is not None and pending.enabled:
+            routes.append(pending)
+
+        snapshot = self.budget.snapshot(self.estimated_calls_per_month(routes))
+        limit = snapshot["limit"]
+        # Two different overages, and both are worth knowing about:
+        #   - this month's, prorated over the days actually left to run;
+        #   - a full month's, which is what the schedule costs from now on.
+        # A change made late in the month can clear the first and still fail the
+        # second, and saying nothing then would be the least useful moment to
+        # stay quiet -- the bill simply arrives next month instead.
+        over_now = snapshot["projected_over_by"]
+        over_sustained = max(0, snapshot["projected_calls_per_month"] - limit)
+        if not over_now and not over_sustained:
+            return None
+
+        # Compute Routes Pro bills about $10 per 1,000 calls past the free tier.
+        def dollars(calls: int) -> str:
+            return f"${calls / 1000 * 10:,.2f}"
+
+        if over_now:
+            return (
+                f"This schedule is projected to reach "
+                f"{snapshot['projected_month_end']:,} Routes API calls by the end of "
+                f"{snapshot['billing_month']} — {over_now:,} over the {limit:,} free-tier "
+                f"allowance, about {dollars(over_now)}. {snapshot['used']:,} calls are already "
+                f"spent this month. Sampling stops automatically once the allowance runs out."
+            )
+        return (
+            f"This schedule costs {snapshot['projected_calls_per_month']:,} Routes API calls "
+            f"over a full month — {over_sustained:,} more than the {limit:,} free-tier "
+            f"allowance, about {dollars(over_sustained)} a month. It fits inside "
+            f"{snapshot['billing_month']} only because {snapshot['days_left_in_month']} days "
+            f"are left to run; a full month at this rate goes over. Sampling stops "
+            f"automatically once the allowance runs out."
+        )

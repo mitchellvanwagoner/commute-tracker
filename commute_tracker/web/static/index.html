@@ -90,6 +90,16 @@
         <div id="table-wrap" hidden></div>
       </section>
 
+      <section class="card" id="usage-card" hidden>
+        <div class="card-head">
+          <h2>Routes API usage</h2>
+          <p class="sub">Sampling stops on its own when the free tier runs out.</p>
+        </div>
+        <div class="usage-track"><div id="usage-bar" class="bar"></div></div>
+        <p id="usage-text" class="usage-text"></p>
+        <p id="usage-note" class="usage-note"></p>
+      </section>
+
       <section class="card" id="failures-card" hidden>
         <div class="card-head">
           <h2>Recent failed lookups</h2>
@@ -100,7 +110,12 @@
     </main>
 
     <p class="footnote">Times come from the Google Maps Routes API with live traffic. Data is stored in a local SQLite file.</p>
-  </div>
+
+    <!-- The dialogs and the tooltip must stay inside .viz-root: that is where the
+         palette custom properties are declared, and outside it var(--surface-1)
+         and var(--text-primary) resolve to nothing -- a transparent panel with
+         black text, invisible against the dark theme. Being in the top layer
+         (showModal) or position:fixed, none of them are affected by its layout. -->
 
 
   <dialog id="route-editor" class="editor">
@@ -114,12 +129,23 @@
 
       <label class="row-field">
         <span>From</span>
-        <input name="origin" type="text" placeholder="1600 Amphitheatre Pkwy, Mountain View, CA" required>
+        <input name="origin" type="text" list="origin-options" autocomplete="off"
+               placeholder="1600 Amphitheatre Pkwy, Mountain View, CA" required>
+        <datalist id="origin-options"></datalist>
       </label>
+
+      <div class="swap-row">
+        <button type="button" class="button ghost swap" id="route-swap"
+                title="Swap From and To" aria-label="Swap the From and To addresses">
+          &#8645; Swap
+        </button>
+      </div>
 
       <label class="row-field">
         <span>To</span>
-        <input name="destination" type="text" placeholder="1 Ferry Building, San Francisco, CA" required>
+        <input name="destination" type="text" list="destination-options" autocomplete="off"
+               placeholder="1 Ferry Building, San Francisco, CA" required>
+        <datalist id="destination-options"></datalist>
       </label>
 
       <div class="field-grid">
@@ -133,7 +159,7 @@
         </label>
         <label class="row-field">
           <span>Check every (min)</span>
-          <input name="interval_minutes" type="number" min="1" max="1440" required>
+          <input name="interval_minutes" type="number" min="5" max="1440" step="1" required>
         </label>
       </div>
 
@@ -165,6 +191,7 @@
         <span>Track this route</span>
       </label>
 
+      <p id="route-cost" class="route-cost"></p>
       <p id="route-test-result" class="test-result"></p>
 
       <div class="editor-actions">
@@ -188,7 +215,9 @@
     </div>
   </dialog>
 
-  <div class="tooltip" id="tooltip" role="status" aria-live="polite" hidden></div>
+    <div class="tooltip" id="tooltip" role="status" aria-live="polite" hidden></div>
+  </div>
+
   <script src="/static/charts.js"></script>
   <script src="/static/routes.js"></script>
   <script src="/static/app.js"></script>

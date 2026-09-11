@@ -322,3 +322,72 @@ fieldset.days label,
 
 /* A disabled top-bar link: still readable, clearly not actionable. */
 .button[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+
+/* --- Routes API usage meter ------------------------------------------- */
+
+.usage-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.18);
+  overflow: hidden;
+}
+
+.usage-track .bar {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: #0ca30c;
+  transition: width 0.3s ease;
+}
+
+.usage-track .bar.warn { background: #fab219; }
+.usage-track .bar.stop { background: #d03b3b; }
+
+.usage-text {
+  margin: 0.6rem 0 0.2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-note {
+  margin: 0;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+.usage-note.warn { color: #a8730a; opacity: 1; }
+.usage-note.bad { color: #d03b3b; opacity: 1; }
+
+/* The projected cost of the route currently being edited. */
+.route-cost {
+  margin: 0.4rem 0 0;
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+.route-cost.warn {
+  color: #a8730a;
+  opacity: 1;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .usage-note.warn,
+  .route-cost.warn { color: #f0b64a; }
+  .usage-note.bad { color: #ef7a7a; }
+}
+
+/* --- Swap From/To --------------------------------------------------------- */
+
+.swap-row {
+  display: flex;
+  justify-content: center;
+  /* Pulled into the gap between the two address fields so it reads as acting
+     on the pair, rather than as another field of its own. */
+  margin: -6px 0 6px;
+}
+
+.button.swap {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+}

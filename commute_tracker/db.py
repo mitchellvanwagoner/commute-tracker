@@ -46,6 +46,21 @@ CREATE TABLE IF NOT EXISTS failures (
 
 CREATE INDEX IF NOT EXISTS idx_failures_route_date
     ON failures (route_id, local_date);
+
+-- One row per request that actually reached the Routes API, which is the unit
+-- Google bills. Kept separate from `samples` because not every billed call
+-- produces a sample: the editor's Test button spends one, and a call that comes
+-- back 4xx still leaves the meter running.
+CREATE TABLE IF NOT EXISTS api_calls (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    called_at_utc TEXT    NOT NULL,
+    billing_month TEXT    NOT NULL,
+    route_id      TEXT,
+    kind          TEXT    NOT NULL,
+    ok            INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_calls_month ON api_calls (billing_month);
 """
 
 # Routes used to live in this database; they now live in routes.yml. The table
@@ -129,6 +144,54 @@ class Database:
                     message[:1000],
                 ),
             )
+
+    # ------------------------------------------------------------ API usage
+
+    def record_api_call(
+        self, *, billing_month: str, kind: str, route_id: str | None = None, ok: bool = True
+    ) -> None:
+        """Tick the meter for one request that reached the Routes API."""
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO api_calls (called_at_utc, billing_month, route_id, kind, ok)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    datetime.now(UTC).isoformat(timespec="seconds"),
+                    billing_month,
+                    route_id,
+                    kind,
+                    int(ok),
+                ),
+            )
+
+    def count_api_calls(self, billing_month: str, kinds: tuple[str, ...] | None = None) -> int:
+        """Billed calls in the given ``YYYY-MM``, optionally only of certain kinds.
+
+        Google meters each SKU against its own free allowance, so a caller
+        counting against one allowance must not be shown another SKU's calls.
+        """
+        sql = "SELECT COUNT(*) FROM api_calls WHERE billing_month = ?"
+        params: list = [billing_month]
+        if kinds:
+            sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+            params.extend(kinds)
+        with self.connect() as conn:
+            return int(conn.execute(sql, params).fetchone()[0])
+
+    def api_calls_by_kind(
+        self, billing_month: str, kinds: tuple[str, ...] | None = None
+    ) -> dict[str, int]:
+        """Where the month's calls went -- scheduled sampling, a manual test, a lookup."""
+        sql = "SELECT kind, COUNT(*) FROM api_calls WHERE billing_month = ?"
+        params: list = [billing_month]
+        if kinds:
+            sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+            params.extend(kinds)
+        with self.connect() as conn:
+            rows = conn.execute(sql + " GROUP BY kind", params).fetchall()
+        return {row[0]: int(row[1]) for row in rows}
 
     # ------------------------------------------------- routes (legacy only)
 

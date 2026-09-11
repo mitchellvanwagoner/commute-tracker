@@ -68,3 +68,37 @@ def test_missing_address_is_rejected():
 def test_unknown_timezone_is_rejected():
     with pytest.raises(ConfigError):
         make_route(timezone="Mars/Olympus_Mons")
+
+
+# The cost guards report rather than raise, so that loading a routes.yml written
+# before a limit existed still works; RouteStore is what turns a report into a
+# refusal. See Route.cost_guard_error and tests/test_routes.py.
+
+
+def test_interval_below_the_floor_is_flagged():
+    """A mistyped interval is the cheap way to a surprise Routes API bill."""
+    problem = make_route(interval_minutes=1).cost_guard_error()
+    assert problem is not None
+    assert "interval_minutes must be >= 5" in problem
+
+
+def test_interval_at_the_floor_is_allowed():
+    route = make_route(interval_minutes=5)
+    assert route.interval_minutes == 5
+    assert route.cost_guard_error() is None
+
+
+def test_too_many_samples_per_day_is_flagged():
+    # 24 hours every 5 minutes is 288 samples, well past the 120/day limit.
+    problem = make_route(
+        window_start="00:00", window_end="23:55", interval_minutes=5
+    ).cost_guard_error()
+    assert problem is not None
+    assert "samples a day" in problem
+
+
+def test_a_realistic_window_is_unaffected():
+    """The guards must not get in the way of an ordinary commute."""
+    route = make_route(window_start="07:00", window_end="09:00", interval_minutes=15)
+    assert len(route.sample_times()) == 9
+    assert route.cost_guard_error() is None

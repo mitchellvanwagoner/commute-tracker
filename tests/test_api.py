@@ -99,3 +99,11 @@ def test_notify_test_is_refused_when_no_notifier_is_configured(client):
     response = client.post("/api/notify/test")
     assert response.status_code == 400
     assert "NTFY_TOPIC" in response.json()["detail"]
+
+
+def test_static_assets_must_be_revalidated(client):
+    """A cached dashboard running stale JavaScript is near-impossible to diagnose."""
+    for path in ("/", "/static/app.js", "/static/routes.js", "/static/styles.css"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers["cache-control"] == "no-cache", path
