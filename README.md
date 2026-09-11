@@ -95,7 +95,19 @@ docker pull ghcr.io/mitchellvanwagoner/commute-tracker:latest
 | `sha-<short sha>` | One exact commit, for pinning |
 
 `latest` deliberately tracks releases rather than `main`, so a pull never lands on
-an untagged commit. The package is public; no `docker login` is needed to pull it.
+an untagged commit.
+
+The package inherits this repository's visibility. While the repository is
+private the image is too, so pulling it needs a one-time login with a personal
+access token carrying the `read:packages` scope:
+
+```bash
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u mitchellvanwagoner --password-stdin
+```
+
+Making the package public (its page under **Packages** → **Package settings** →
+**Change visibility**) drops that step without making the source repository
+public.
 
 To cut a release, tag a commit and push the tag — the workflow publishes the
 version tags and moves `latest`:
