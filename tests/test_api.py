@@ -3,8 +3,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from commute_tracker.config import Route, Settings
+from commute_tracker.config import Settings
 from commute_tracker.db import Database
+from commute_tracker.routes import RouteStore
 from commute_tracker.web.app import create_app
 
 TZ = timezone(timedelta(hours=-8))
@@ -12,8 +13,7 @@ TZ = timezone(timedelta(hours=-8))
 
 @pytest.fixture()
 def client(tmp_path):
-    route = Route.from_dict(
-        {
+    spec = {
             "name": "Morning commute",
             "origin": "A St",
             "destination": "B Ave",
@@ -22,9 +22,10 @@ def client(tmp_path):
             "interval_minutes": 30,
             "days": "mon,tue,wed,thu,fri",
             "timezone": "UTC",
-        }
-    )
+    }
     db_path = tmp_path / "test.db"
+    routes_file = tmp_path / "routes.yml"
+    route = RouteStore(routes_file).create(spec)
     db = Database(db_path)
     for clock, seconds in (("07:00", 600), ("07:30", 1200)):
         hour, minute = (int(p) for p in clock.split(":"))
@@ -39,7 +40,7 @@ def client(tmp_path):
             distance_meters=40000,
         )
 
-    settings = Settings(api_key="test-key", routes=[route], db_path=db_path)
+    settings = Settings(api_key="test-key", db_path=db_path, routes_file=routes_file)
     with TestClient(create_app(settings, run_scheduler=False)) as test_client:
         yield test_client
 

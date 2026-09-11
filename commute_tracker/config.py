@@ -1,11 +1,8 @@
-"""Configuration loading.
+"""Process configuration and the :class:`Route` type.
 
-A route can be configured two ways:
-
-1. Environment variables (single route) -- the simplest setup.
-2. ``routes.yml`` (one or more routes) -- for tracking several commutes at once.
-
-If ``routes.yml`` exists it wins; otherwise the environment is used.
+The environment holds the things that are true of the whole installation -- the
+API key, where to store data, how the daily report is scored. The routes
+themselves live in ``routes.yml`` and are managed by :mod:`commute_tracker.routes`.
 """
 
 from __future__ import annotations
@@ -17,7 +14,6 @@ from datetime import time
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -197,77 +193,35 @@ class Settings:
     """Everything the app needs to run."""
 
     api_key: str
-    routes: list[Route]
     db_path: Path
+    routes_file: Path
     host: str = "0.0.0.0"
     port: int = 8080
-    routes_file: Path | None = None
     traffic_model: str = "TRAFFIC_AWARE"
     request_timeout: float = 20.0
     notify: NotifySettings = field(default_factory=NotifySettings)
     extras: dict = field(default_factory=dict)
 
 
-def _routes_from_env() -> list[Route]:
-    return [
-        Route.from_dict(
-            {
-                "name": os.getenv("ROUTE_NAME", "commute"),
-                "origin": os.getenv("ORIGIN_ADDRESS", ""),
-                "destination": os.getenv("DESTINATION_ADDRESS", ""),
-                "window_start": os.getenv("WINDOW_START", "07:00"),
-                "window_end": os.getenv("WINDOW_END", "09:00"),
-                "interval_minutes": os.getenv("SAMPLE_INTERVAL_MINUTES", "15"),
-                "days": os.getenv("DAYS", "mon,tue,wed,thu,fri"),
-                # TZ is the conventional Docker variable; TIMEZONE is the
-                # explicit fallback, since some shells strip TZ from the
-                # environment they hand to child processes.
-                "timezone": os.getenv("TIMEZONE") or os.getenv("TZ") or "UTC",
-                "notify_at": os.getenv("NOTIFY_AT", "").strip() or None,
-                "notify_days": os.getenv("NOTIFY_DAYS", "").strip() or None,
-            }
-        )
-    ]
-
-
-def _routes_from_file(path: Path) -> list[Route]:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict) or "routes" not in raw:
-        raise ConfigError(f"{path} must contain a top-level 'routes:' list")
-    defaults = raw.get("defaults") or {}
-    routes = [Route.from_dict(entry, defaults) for entry in raw["routes"]]
-    if not routes:
-        raise ConfigError(f"{path} defines no routes")
-    seen: set[str] = set()
-    for route in routes:
-        if route.id in seen:
-            raise ConfigError(f"Duplicate route id {route.id!r} in {path}")
-        seen.add(route.id)
-    return routes
-
-
 def load_settings() -> Settings:
-    """Build :class:`Settings` from ``routes.yml`` if present, else the environment."""
+    """Build :class:`Settings` from the environment."""
     api_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
     if not api_key:
         raise ConfigError(
             "GOOGLE_MAPS_API_KEY is not set. Copy .env.example to .env and add your key."
         )
 
-    routes_file = Path(os.getenv("ROUTES_FILE", "routes.yml"))
-    if routes_file.exists():
-        routes = _routes_from_file(routes_file)
-    else:
-        routes_file = None
-        routes = _routes_from_env()
+    db_path = Path(os.getenv("DB_PATH", "data/commutes.db"))
+    # Routes sit beside the database by default, so whatever keeps one keeps
+    # the other -- one volume to back up, one to carry across a rebuild.
+    routes_file = Path(os.getenv("ROUTES_FILE", "") or db_path.parent / "routes.yml")
 
     return Settings(
         api_key=api_key,
-        routes=routes,
-        db_path=Path(os.getenv("DB_PATH", "data/commutes.db")),
+        db_path=db_path,
+        routes_file=routes_file,
         host=os.getenv("HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "8080")),
-        routes_file=routes_file,
         traffic_model=os.getenv("TRAFFIC_MODEL", "TRAFFIC_AWARE"),
         request_timeout=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20")),
         notify=NotifySettings(

@@ -46,26 +46,21 @@ minutes on weekdays is roughly 200 calls a month.
 
 ```bash
 cp .env.example .env
-# then edit .env: API key, the two addresses, the window, and the timezone
+# then edit .env: just the API key is enough to start
 ```
 
-`.env` only needs the API key and one starter route. **Routes are stored in the
-database and edited from the dashboard** — `.env` and `routes.yml` seed them the
-first time the app runs against a fresh database, and are not read again. That is
-deliberate: a restart must never silently undo an edit you made in the UI.
+`.env` holds installation-wide settings — the API key, where data lives, the
+port, how reports are scored, notifier credentials. **It holds no route data.**
 
 | Variable | Meaning |
 | --- | --- |
 | `GOOGLE_MAPS_API_KEY` | Key with the Routes API enabled (required) |
-| `ORIGIN_ADDRESS` / `DESTINATION_ADDRESS` | The two addresses, as you would type them into Maps |
-| `WINDOW_START` / `WINDOW_END` | The daily tracking window, `HH:MM` 24-hour |
-| `SAMPLE_INTERVAL_MINUTES` | How often to sample inside the window |
-| `DAYS` | Which days to track, e.g. `mon,tue,wed,thu,fri` |
-| `TZ` | Timezone the window is expressed in, e.g. `America/Los_Angeles` |
-| `TRAFFIC_MODEL` | `TRAFFIC_AWARE` (default) or `TRAFFIC_AWARE_OPTIMAL` (more accurate, costs more) |
-| `PORT` | Dashboard port, default `8080` |
 | `DB_PATH` | SQLite file, default `/data/commutes.db` in the container |
-| `NOTIFY_AT` + a service | Daily push notification — see [below](#daily-push-notification) |
+| `ROUTES_FILE` | Route file, default `routes.yml` beside the database |
+| `PORT` | Dashboard port, default `8080` |
+| `TZ` | Container clock, and the timezone prefilled when adding a route |
+| `TRAFFIC_MODEL` | `TRAFFIC_AWARE` (default) or `TRAFFIC_AWARE_OPTIMAL` (more accurate, costs more) |
+| notifier + scoring | See [the notification section](#daily-push-notification) |
 
 ### 3. Run
 
@@ -73,14 +68,11 @@ deliberate: a restart must never silently undo an edit you made in the UI.
 docker compose up -d --build
 ```
 
-Then open <http://localhost:8080>.
-
-Samples begin at the next scheduled time inside your window. To confirm the key
-works right away without waiting:
-
-```bash
-docker compose exec commute-tracker python -m commute_tracker sample
-```
+Open <http://localhost:8080>. A fresh install has **no routes** — the dashboard
+comes up empty with an **Add a route** button, which is where you enter the two
+addresses and the window you want tracked. **Test addresses** in the editor does
+a live lookup without saving, so you can confirm the addresses resolve and the
+API key works before committing.
 
 ## Daily push notification
 
@@ -128,13 +120,10 @@ at a self-hosted or protected instance instead.
 application to get its API token, then set `PUSHOVER_TOKEN` and `PUSHOVER_USER`
 (your user key, on the Pushover dashboard).
 
-Then pick a time — set `NOTIFY_AT` to something after `WINDOW_END` so the report
-covers the whole window:
-
-```bash
-NOTIFY_AT=09:30
-NTFY_TOPIC=your-hard-to-guess-topic
-```
+Then set the **report time on the route itself**, in the dashboard editor
+("Daily report at"). Pick something after the window closes so the report covers
+the whole window — the log warns you if it does not. Leave it blank for a route
+you do not want notifications about.
 
 Send one immediately to check it all works:
 
@@ -144,30 +133,49 @@ docker compose exec commute-tracker python -m commute_tracker notify
 
 ## Managing routes
 
-The **Routes** card on the dashboard is the normal way to do this. *Add a route*
-opens an editor for the two addresses, the tracking window, how often to check,
-which days, the timezone and an optional daily report time. **Test addresses**
-does a live lookup without saving, so you find out that an address is ambiguous
-or that your API key is wrong before you commit to it.
+The **Routes** card on the dashboard is where routes are added, edited, paused
+and deleted. Each one has two addresses, a tracking window, how often to check
+inside it, which days, a timezone and an optional daily report time.
 
-Each route can be:
+Every change is **written straight to `routes.yml`**, so routes survive a
+restart, a rebuild, or the database being deleted. By default that file sits
+beside the database (`/data/routes.yml` in the container), on the same volume,
+so one thing to back up and nothing to remember.
 
-- **Edited** — including its addresses. The route keeps its identity, so its
-  collected history stays attached (renaming it does not orphan the data).
+A route can be:
+
+- **Edited** — including its addresses. It keeps its id, so its collected
+  history stays attached; renaming it does not orphan the data.
 - **Paused** — stops sampling and stops the report, keeps everything recorded.
 - **Deleted** — you are asked whether to keep the history. Kept history stays
-  visible in the dashboard as a read-only route; re-creating a route with the
-  same name reclaims its old id and reattaches the data.
+  visible as a read-only route, and re-creating a route with the same name
+  reclaims its old id and reattaches the data.
 
-Every change takes effect immediately: the API reschedules that route's jobs as
-part of the same request, so nothing needs restarting.
+Having **no routes at all** is a normal state, not an error: delete them all and
+the dashboard simply comes up empty with the editor ready.
 
-### Seeding several routes at once
+Changes take effect immediately — the API reschedules that route's jobs inside
+the same request, so nothing needs restarting.
 
-To start with more than one route, copy `routes.example.yml` to `routes.yml`,
-list them there, and uncomment the `routes.yml` bind mount in
-`docker-compose.yml`. Remember this is a *seed*: once the database exists, the
-dashboard owns the routes and the file is ignored.
+### Editing routes.yml by hand
+
+The file is yours to read, edit, back up or commit. It looks like
+[`routes.example.yml`](routes.example.yml), and a change on disk is picked up
+without a restart. Two things to know:
+
+- **Quote the times.** YAML reads a bare `16:30` as a number.
+- **Keep each route's `id`.** Samples are recorded against the id, so changing
+  one orphans that route's history.
+
+Writes are atomic (written to a temp file, then renamed), so an interrupted
+write cannot leave you with a truncated file.
+
+To start from a prepared file, copy it to `/data/routes.yml` before first run:
+
+```bash
+docker compose cp routes.yml commute-tracker:/data/routes.yml
+docker compose restart commute-tracker
+```
 
 ## Command line
 
@@ -197,17 +205,16 @@ cp .env.example .env    # fill it in; set DB_PATH=data/commutes.db
 | `commute_tracker/report.py` | Scores today against the baseline; severity, wording, Maps link |
 | `commute_tracker/notify.py` | Push delivery (ntfy, Pushover); one class per provider |
 | `commute_tracker/db.py` | SQLite schema, writes, and every aggregation the dashboard needs |
-| `commute_tracker/routes.py` | The route store: validation, CRUD, and one-time seeding from config |
+| `commute_tracker/routes.py` | The route store: reads and writes `routes.yml`, validates every edit |
 | `commute_tracker/tracker.py` | Turns a window into one cron job per sample time and runs them |
 | `commute_tracker/web/app.py` | FastAPI: the JSON API, the CSV export, and the page |
 | `commute_tracker/web/static/` | The dashboard — plain HTML, CSS and SVG charts |
 
 ### A note on access
 
-The dashboard can change what the tracker does and spends API quota, and it has
-no login. That is fine on a home network; do not port-forward it to the open
-internet. Put it behind your existing reverse proxy, VPN or Tailscale if you want
-it from outside.
+The dashboard can change what the tracker does and spends API quota, and it ships
+with no authentication of its own — put it behind whatever you already use
+(reverse proxy, VPN, Tailscale) rather than exposing it directly.
 
 Each route's window becomes a set of cron jobs — one per clock time — rather than a
 single interval timer. That way every day's samples land at the same clock times,
@@ -218,6 +225,12 @@ The daily report reads the same aggregations the dashboard does, so the badge on
 the page and the notification on your phone can never disagree. A provider that
 fails is logged and reported per-channel rather than raised — one dead channel
 must not silence the other or take the scheduler down.
+
+## Upgrading from an earlier version
+
+An install whose routes were stored in the database migrates itself: on first
+start the routes are written out to `routes.yml` and the old table is dropped.
+Nothing is lost and there is nothing to do.
 
 ## Development
 

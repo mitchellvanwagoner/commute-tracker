@@ -1,9 +1,16 @@
-# Optional. Copy to routes.yml to start with more than one commute.
+# An example of the file the dashboard writes and reads.
 #
-# This is a SEED, used only when the database is first created: it replaces the
-# single route defined in .env. From then on routes are managed in the dashboard
-# and this file is ignored, so edits made in the UI survive a restart.
-# (GOOGLE_MAPS_API_KEY always comes from the environment.)
+# You do not need to create this by hand: add routes in the dashboard and it is
+# written for you, at /data/routes.yml inside the container (beside the
+# database) unless ROUTES_FILE says otherwise. Copy this to that path to start
+# with routes already defined, or hand-edit the live file -- changes on disk are
+# picked up without a restart.
+#
+# Keep a route's `id` to keep its collected history: the id is what samples are
+# recorded against, so renaming a route is safe but changing its id orphans its
+# data. `defaults` apply to every route that does not override them.
+#
+# Times must be quoted, or YAML reads 16:30 as a number.
 
 defaults:
   timezone: America/Los_Angeles
@@ -11,22 +18,21 @@ defaults:
   days: mon,tue,wed,thu,fri
 
 routes:
-  - name: Morning commute
+  - id: morning-commute
+    name: Morning commute
     origin: 1600 Amphitheatre Parkway, Mountain View, CA
     destination: 1 Ferry Building, San Francisco, CA
     window_start: "07:00"
     window_end: "09:00"
+    notify_at: "09:30"
+    enabled: true
 
-  - name: Evening commute
+  - id: evening-commute
+    name: Evening commute
     origin: 1 Ferry Building, San Francisco, CA
     destination: 1600 Amphitheatre Parkway, Mountain View, CA
     window_start: "16:30"
     window_end: "18:30"
     interval_minutes: 10
-
-# Per-route notification timing is also supported:
-#
-#   - name: Morning commute
-#     ...
-#     notify_at: "09:30"
-#     notify_days: mon,tue,wed,thu,fri
+    notify_at: "19:00"
+    enabled: true

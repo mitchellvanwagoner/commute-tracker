@@ -42,10 +42,10 @@ class CommuteTracker:
             traffic_model=settings.traffic_model,
         )
         self.notifiers = notifiers_from_env() if notifiers is None else notifiers
-        self.store = RouteStore(self.db)
-        # First run only: lift whatever .env / routes.yml describe into the
-        # database, which is the editable source of truth from then on.
-        self.store.seed(settings.routes)
+        self.store = RouteStore(settings.routes_file)
+        # Upgrade path from the version that kept routes in SQLite.
+        if self.store.migrate_from_database(self.db):
+            self.db.drop_legacy_routes_table()
         self.scheduler = AsyncIOScheduler()
 
     @property
@@ -121,8 +121,11 @@ class CommuteTracker:
     # -------------------------------------------------------------- schedule
 
     def schedule(self) -> None:
-        """Register jobs for every enabled route."""
-        for route in self.active_routes():
+        """Register jobs for every enabled route. Having none is perfectly valid."""
+        routes = self.active_routes()
+        if not routes:
+            log.info("No routes configured yet -- add one from the dashboard")
+        for route in routes:
             self.schedule_route(route)
 
     def schedule_route(self, route: Route) -> None:

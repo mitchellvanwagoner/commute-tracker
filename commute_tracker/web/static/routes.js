@@ -39,6 +39,11 @@ const Routes = (() => {
   }
 
   function renderTable(routes) {
+    if (!routes.length) {
+      el("routes-table").innerHTML =
+        '<p class="empty">No routes yet. Add one to start tracking a commute.</p>';
+      return;
+    }
     const rows = routes
       .map((route) => {
         const editable = route.configured;

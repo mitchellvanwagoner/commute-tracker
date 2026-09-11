@@ -46,34 +46,11 @@ CREATE TABLE IF NOT EXISTS failures (
 
 CREATE INDEX IF NOT EXISTS idx_failures_route_date
     ON failures (route_id, local_date);
-
--- Small key/value store for facts about the database itself, such as whether
--- the config files have already been imported.
-CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
--- Routes are edited from the dashboard, so the database is their source of
--- truth. .env / routes.yml seed this table on first run and are not consulted
--- again; deleting a route leaves its samples behind on purpose.
-CREATE TABLE IF NOT EXISTS routes (
-    id               TEXT    PRIMARY KEY,
-    name             TEXT    NOT NULL,
-    origin           TEXT    NOT NULL,
-    destination      TEXT    NOT NULL,
-    window_start     TEXT    NOT NULL,
-    window_end       TEXT    NOT NULL,
-    interval_minutes INTEGER NOT NULL,
-    days             TEXT    NOT NULL,
-    timezone         TEXT    NOT NULL,
-    notify_at        TEXT,
-    notify_days      TEXT,
-    enabled          INTEGER NOT NULL DEFAULT 1,
-    created_at       TEXT    NOT NULL,
-    updated_at       TEXT    NOT NULL
-);
 """
+
+# Routes used to live in this database; they now live in routes.yml. The table
+# is only read once, to migrate an existing install, and then dropped.
+LEGACY_ROUTES_TABLE = "routes"
 
 
 class Database:
@@ -153,76 +130,25 @@ class Database:
                 ),
             )
 
-    # ------------------------------------------------------------------ meta
+    # ------------------------------------------------- routes (legacy only)
 
-    def get_meta(self, key: str) -> str | None:
+    def legacy_route_rows(self) -> list[dict]:
+        """Rows from the old routes table, or nothing if it was never created."""
         with self.connect() as conn:
-            row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else None
-
-    def set_meta(self, key: str, value: str) -> None:
-        with self.connect() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, str(value))
-            )
-
-    # ---------------------------------------------------------------- routes
-
-    def list_route_rows(self) -> list[dict]:
-        """Every configured route, newest name order, enabled or not."""
-        with self.connect() as conn:
-            rows = conn.execute("SELECT * FROM routes ORDER BY name").fetchall()
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+                (LEGACY_ROUTES_TABLE,),
+            ).fetchone()
+            if not table:
+                return []
+            rows = conn.execute(f"SELECT * FROM {LEGACY_ROUTES_TABLE} ORDER BY name").fetchall()
         return [dict(row) for row in rows]
 
-    def get_route_row(self, route_id: str) -> dict | None:
+    def drop_legacy_routes_table(self) -> None:
+        """Remove the old table once its contents are safely in routes.yml."""
         with self.connect() as conn:
-            row = conn.execute("SELECT * FROM routes WHERE id = ?", (route_id,)).fetchone()
-        return dict(row) if row else None
-
-    def save_route_row(self, row: dict) -> None:
-        """Insert or replace one route, stamping created_at/updated_at."""
-        now = datetime.now(UTC).isoformat(timespec="seconds")
-        existing = self.get_route_row(row["id"])
-        payload = {
-            **row,
-            "created_at": existing["created_at"] if existing else now,
-            "updated_at": now,
-        }
-        columns = [
-            "id",
-            "name",
-            "origin",
-            "destination",
-            "window_start",
-            "window_end",
-            "interval_minutes",
-            "days",
-            "timezone",
-            "notify_at",
-            "notify_days",
-            "enabled",
-            "created_at",
-            "updated_at",
-        ]
-        placeholders = ", ".join("?" for _ in columns)
-        with self.connect() as conn:
-            conn.execute(
-                f"INSERT OR REPLACE INTO routes ({', '.join(columns)}) VALUES ({placeholders})",
-                tuple(payload[column] for column in columns),
-            )
-
-    def delete_route_row(self, route_id: str) -> bool:
-        """Remove a route. Its collected samples are deliberately left in place."""
-        with self.connect() as conn:
-            cursor = conn.execute("DELETE FROM routes WHERE id = ?", (route_id,))
-            return cursor.rowcount > 0
-
-    def route_id_exists(self, route_id: str) -> bool:
-        with self.connect() as conn:
-            return (
-                conn.execute("SELECT 1 FROM routes WHERE id = ?", (route_id,)).fetchone()
-                is not None
-            )
+            conn.execute(f"DROP TABLE IF EXISTS {LEGACY_ROUTES_TABLE}")
+            conn.execute("DROP TABLE IF EXISTS meta")
 
     def delete_samples(self, route_id: str) -> int:
         """Erase a route's collected history. Only called when explicitly asked."""
@@ -249,6 +175,16 @@ class Database:
                 """
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def tracked_routes_contains(self, route_id: str) -> bool:
+        """Whether any sample was ever recorded for this route id."""
+        with self.connect() as conn:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM samples WHERE route_id = ? LIMIT 1", (route_id,)
+                ).fetchone()
+                is not None
+            )
 
     def summary(self, route_id: str, *, days: int | None = None) -> dict:
         """Min / max / average / median across the tracked history."""

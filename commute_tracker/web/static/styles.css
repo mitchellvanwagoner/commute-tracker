@@ -319,3 +319,6 @@ fieldset.days label,
   .editor-actions .spacer { display: none; }
   .editor-actions { justify-content: flex-end; }
 }
+
+/* A disabled top-bar link: still readable, clearly not actionable. */
+.button[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }

@@ -9,9 +9,9 @@ services:
     ports:
       - "${PORT:-8080}:8080"
     volumes:
+      # Holds both the database and routes.yml, so routes added in the
+      # dashboard survive a rebuild or a reboot.
       - commute-data:/data
-      # Uncomment to track more than one route (see routes.example.yml):
-      # - ./routes.yml:/app/routes.yml:ro
     environment:
       PORT: 8080
       DB_PATH: /data/commutes.db

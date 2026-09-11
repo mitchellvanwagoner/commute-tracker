@@ -57,6 +57,10 @@ def cmd_sample(args) -> int:
         finally:
             await tracker.shutdown()
 
+    if not tracker.active_routes():
+        print("No routes to sample. Add one in the dashboard.")
+        return 0
+
     results = asyncio.run(run())
     for result in results:
         print(f"{result['route_id']}: {_minutes(result['duration_seconds'])}")
@@ -86,6 +90,9 @@ def cmd_stats(args) -> int:
 def cmd_schedule(args) -> int:
     settings = load_settings()
     tracker = CommuteTracker(settings)
+    if not tracker.routes:
+        print(f"No routes configured. Add one in the dashboard, or in {settings.routes_file}.")
+        return 0
     for route in tracker.routes:
         times = [t.strftime("%H:%M") for t in route.sample_times()]
         state = "" if route.enabled else "  (disabled)"

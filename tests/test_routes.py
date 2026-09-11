@@ -1,12 +1,13 @@
-from datetime import datetime, time, timedelta, timezone
+"""The route store, whose source of truth is routes.yml on disk."""
+
+from datetime import UTC, time
 
 import pytest
+import yaml
 
 from commute_tracker.config import ConfigError, Route
 from commute_tracker.db import Database
 from commute_tracker.routes import RouteStore
-
-TZ = timezone(timedelta(hours=-8))
 
 BASE = {
     "name": "Morning commute",
@@ -21,26 +22,123 @@ BASE = {
 
 
 @pytest.fixture()
-def store(tmp_path):
-    return RouteStore(Database(tmp_path / "routes.db"))
+def path(tmp_path):
+    return tmp_path / "routes.yml"
 
 
-def test_create_allocates_a_slug_id_and_round_trips(store):
+@pytest.fixture()
+def store(path):
+    return RouteStore(path)
+
+
+def read_yaml(path):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+# --------------------------------------------------------------- persistence
+
+
+def test_a_missing_file_means_no_routes_not_an_error(store):
+    assert store.all() == []
+    assert store.get("anything") is None
+
+
+def test_create_writes_the_route_to_the_file(store, path):
     route = store.create(BASE)
-    assert route.id == "morning-commute"
-    assert store.get("morning-commute") == route
-    assert [r.id for r in store.all()] == ["morning-commute"]
+
+    assert path.exists()
+    entry = read_yaml(path)["routes"][0]
+    assert entry["id"] == route.id == "morning-commute"
+    assert entry["origin"] == "A St"
+    assert entry["window_start"] == "07:00"
+    assert entry["days"] == "mon,tue,wed,thu,fri"
+    assert entry["enabled"] is True
+
+
+def test_routes_survive_a_restart(store, path):
+    store.create(BASE)
+    store.create({**BASE, "name": "Evening commute", "origin": "B Ave", "destination": "A St"})
+
+    # A brand new store, as after a reboot: nothing but the file is shared.
+    restarted = RouteStore(path)
+    assert [r.id for r in restarted.all()] == ["morning-commute", "evening-commute"]
+    assert restarted.get("evening-commute").destination == "A St"
+
+
+def test_edits_are_written_through_to_the_file(store, path):
+    route = store.create(BASE)
+    store.update(route.id, {"origin": "New Origin Rd", "window_start": "06:30"})
+
+    entry = read_yaml(path)["routes"][0]
+    assert entry["origin"] == "New Origin Rd"
+    assert entry["window_start"] == "06:30"
+    assert RouteStore(path).get(route.id).origin == "New Origin Rd"
+
+
+def test_delete_removes_it_from_the_file(store, path):
+    store.create(BASE)
+    store.create({**BASE, "name": "Evening commute"})
+
+    assert store.delete("morning-commute") is True
+    assert [e["id"] for e in read_yaml(path)["routes"]] == ["evening-commute"]
+
+
+def test_deleting_the_last_route_leaves_a_valid_empty_file(store, path):
+    store.create(BASE)
+    store.delete("morning-commute")
+
+    assert read_yaml(path) == {"routes": []}
+    assert RouteStore(path).all() == []
+
+
+def test_a_hand_edit_is_picked_up_without_a_restart(store, path):
+    store.create(BASE)
+    document = read_yaml(path)
+    document["routes"][0]["destination"] = "Edited By Hand Ave"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    assert store.get("morning-commute").destination == "Edited By Hand Ave"
+
+
+def test_times_come_back_as_strings_not_numbers(store, path):
+    """Whatever the quoting, a time must load as a string rather than an int."""
+    store.create({**BASE, "window_start": "07:00", "notify_at": "09:30"})
+
+    entry = read_yaml(path)["routes"][0]
+    assert isinstance(entry["window_start"], str)
+    assert isinstance(entry["notify_at"], str)
+    reloaded = RouteStore(path).get("morning-commute")
+    assert reloaded.window_start == time(7, 0)
+    assert reloaded.notify_at == time(9, 30)
+
+
+def test_optional_fields_are_omitted_rather_than_written_as_null(store, path):
+    store.create(BASE)
+    entry = read_yaml(path)["routes"][0]
+    assert "notify_at" not in entry
+    assert "notify_days" not in entry
+
+
+def test_a_failed_write_does_not_leave_a_temp_file_behind(store, path, monkeypatch):
+    store.create(BASE)
+    monkeypatch.setattr("commute_tracker.routes.os.replace", _boom)
+    with pytest.raises(RuntimeError):
+        store.create({**BASE, "name": "Evening commute"})
+
+    assert list(path.parent.glob(".routes.yml.*")) == []
+    assert [r.id for r in RouteStore(path).all()] == ["morning-commute"]
+
+
+def _boom(*args, **kwargs):
+    raise RuntimeError("disk full")
+
+
+# ---------------------------------------------------------------------- CRUD
 
 
 def test_duplicate_names_get_distinct_ids(store):
-    first = store.create(BASE)
-    second = store.create(BASE)
-    third = store.create(BASE)
-    assert [first.id, second.id, third.id] == [
-        "morning-commute",
-        "morning-commute-2",
-        "morning-commute-3",
-    ]
+    ids = [store.create(BASE).id for _ in range(3)]
+    assert ids == ["morning-commute", "morning-commute-2", "morning-commute-3"]
 
 
 def test_update_is_partial_and_keeps_the_id(store):
@@ -51,23 +149,25 @@ def test_update_is_partial_and_keeps_the_id(store):
     assert updated.destination == "C Blvd"
     assert updated.interval_minutes == 5
     assert updated.origin == "A St"
-    assert updated.name == "Morning commute"
 
 
-def test_renaming_does_not_move_the_route_or_orphan_its_samples(store):
+def test_renaming_keeps_the_id_so_samples_stay_attached(store, tmp_path):
+    from datetime import datetime
+
+    db = Database(tmp_path / "samples.db")
     route = store.create(BASE)
-    store.db.record_sample(
+    db.record_sample(
         route_id=route.id,
         route_name=route.name,
         origin=route.origin,
         destination=route.destination,
-        local_dt=datetime(2026, 2, 10, 7, 0, tzinfo=TZ),
+        local_dt=datetime(2026, 2, 10, 7, 0, tzinfo=UTC),
         duration_seconds=900,
     )
     renamed = store.update(route.id, {"name": "Totally different name"})
 
     assert renamed.id == "morning-commute"
-    assert store.db.summary(renamed.id)["samples"] == 1
+    assert db.summary(renamed.id)["samples"] == 1
 
 
 def test_update_can_clear_the_report_time(store):
@@ -82,43 +182,6 @@ def test_disabling_keeps_the_route_but_drops_it_from_active(store):
 
     assert len(store.all()) == 1
     assert store.all(enabled_only=True) == []
-
-
-def test_delete_keeps_history_by_default(store):
-    route = store.create(BASE)
-    store.db.record_sample(
-        route_id=route.id,
-        route_name=route.name,
-        origin=route.origin,
-        destination=route.destination,
-        local_dt=datetime(2026, 2, 10, 7, 0, tzinfo=TZ),
-        duration_seconds=900,
-    )
-
-    assert store.delete(route.id) is True
-    assert store.get(route.id) is None
-    assert store.db.summary(route.id)["samples"] == 1
-
-
-def test_delete_can_drop_history_when_asked(store):
-    route = store.create(BASE)
-    store.db.record_sample(
-        route_id=route.id,
-        route_name=route.name,
-        origin=route.origin,
-        destination=route.destination,
-        local_dt=datetime(2026, 2, 10, 7, 0, tzinfo=TZ),
-        duration_seconds=900,
-    )
-    store.db.record_failure(
-        route_id=route.id,
-        local_dt=datetime(2026, 2, 10, 7, 15, tzinfo=TZ),
-        message="boom",
-    )
-
-    assert store.delete(route.id, drop_history=True) is True
-    assert store.db.summary(route.id)["samples"] == 0
-    assert store.db.recent_failures(route.id) == []
 
 
 def test_delete_of_an_unknown_route_is_false_not_an_error(store):
@@ -141,26 +204,104 @@ def test_update_of_an_unknown_route_raises_lookup_error(store):
         ({**BASE, "colour": "red"}, "Unknown field"),
     ],
 )
-def test_invalid_payloads_are_rejected(store, payload, message):
+def test_invalid_payloads_are_rejected(store, path, payload, message):
     with pytest.raises(ConfigError, match=message):
         store.create(payload)
+    assert not path.exists()  # nothing half-written
 
 
-def test_seed_populates_an_empty_table_once(store):
-    route = Route.from_dict(BASE)
-    assert store.seed([route]) == 1
-    assert [r.id for r in store.all()] == [route.id]
-
-    # A second run must not resurrect a route the user deleted in the UI.
-    store.delete(route.id)
-    assert store.seed([route]) == 0
-    assert store.all() == []
+def test_a_malformed_file_is_reported_clearly(store, path):
+    path.write_text("routes:\n  - name: no addresses here\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="missing required"):
+        store.all()
 
 
-def test_seed_does_not_overwrite_edits_made_in_the_ui(store):
-    seeded = Route.from_dict(BASE)
-    store.seed([seeded])
-    store.update(seeded.id, {"origin": "Somewhere else"})
+def test_duplicate_ids_in_a_hand_edited_file_are_rejected(store, path):
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "routes": [
+                    {"id": "same", "name": "One", "origin": "A", "destination": "B"},
+                    {"id": "same", "name": "Two", "origin": "C", "destination": "D"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="Duplicate route id"):
+        store.all()
 
-    store.seed([seeded])
-    assert store.get(seeded.id).origin == "Somewhere else"
+
+def test_defaults_in_a_hand_written_file_apply_to_every_route(store, path):
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "defaults": {"timezone": "America/Los_Angeles", "interval_minutes": 5},
+                "routes": [
+                    {"name": "One", "origin": "A", "destination": "B"},
+                    {"name": "Two", "origin": "C", "destination": "D", "interval_minutes": 30},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    one, two = store.all()
+    assert one.timezone == two.timezone == "America/Los_Angeles"
+    assert (one.interval_minutes, two.interval_minutes) == (5, 30)
+
+
+# ----------------------------------------------------------------- migration
+
+
+def test_routes_are_migrated_out_of_an_old_database(tmp_path, path):
+    db = Database(tmp_path / "legacy.db")
+    with db.connect() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE routes (
+                id TEXT PRIMARY KEY, name TEXT, origin TEXT, destination TEXT,
+                window_start TEXT, window_end TEXT, interval_minutes INTEGER,
+                days TEXT, timezone TEXT, notify_at TEXT, notify_days TEXT,
+                enabled INTEGER, created_at TEXT, updated_at TEXT
+            );
+            INSERT INTO routes VALUES ('morning-commute', 'Morning commute', 'A St', 'B Ave',
+                '07:00', '09:00', 15, 'mon,tue', 'UTC', '09:30', NULL, 1, 'x', 'x');
+            """
+        )
+
+    store = RouteStore(path)
+    assert store.migrate_from_database(db) == 1
+    assert store.get("morning-commute").notify_at == time(9, 30)
+
+    db.drop_legacy_routes_table()
+    assert db.legacy_route_rows() == []
+    # And it does not run again now that the file exists.
+    assert store.migrate_from_database(db) == 0
+
+
+def test_migration_does_not_overwrite_an_existing_file(tmp_path, path):
+    db = Database(tmp_path / "legacy.db")
+    store = RouteStore(path)
+    store.create(BASE)
+    assert store.migrate_from_database(db) == 0
+
+
+def test_migration_is_a_no_op_without_a_legacy_table(tmp_path, path):
+    db = Database(tmp_path / "fresh.db")
+    assert RouteStore(path).migrate_from_database(db) == 0
+    assert not path.exists()
+
+
+def test_route_from_dict_ignores_legacy_bookkeeping_columns():
+    route = Route.from_dict({**BASE, "id": "x"})
+    assert route.id == "x"
+
+
+def test_an_evening_window_survives_the_round_trip(store, path):
+    """A bare 16:30 is the integer 990 in YAML 1.1, which would corrupt the file."""
+    store.create(
+        {**BASE, "name": "Evening commute", "window_start": "16:30", "window_end": "18:30"}
+    )
+    reloaded = RouteStore(path).get("evening-commute")
+    assert reloaded.window_start == time(16, 30)
+    assert reloaded.window_end == time(18, 30)

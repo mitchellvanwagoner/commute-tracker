@@ -116,8 +116,13 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
     @app.delete("/api/routes/{route_id}")
     async def api_delete_route(route_id: str, drop_history: bool = False):
         """Stop tracking a route. Its samples are kept unless drop_history=true."""
-        if not tracker.store.delete(route_id, drop_history=drop_history):
+        removed = tracker.store.delete(route_id)
+        # A route may be gone from routes.yml while its samples remain, so
+        # dropping history has to work for those too.
+        if not removed and not tracker.db.tracked_routes_contains(route_id):
             raise HTTPException(status_code=404, detail=f"Unknown route {route_id!r}")
+        if drop_history:
+            tracker.db.delete_samples(route_id)
         tracker.reschedule_route(route_id)
         return {"deleted": route_id, "history_dropped": drop_history}
 

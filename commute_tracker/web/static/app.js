@@ -232,13 +232,32 @@ function escapeHtml(value) {
   return node.innerHTML;
 }
 
+/** Blank out the charts and stats when there is no route to show. */
+function showEmptyState() {
+  $("route-line").textContent = "No routes yet \u2014 add one below to start tracking a commute.";
+  $("hero-value").textContent = "\u2014";
+  $("hero-sub").textContent = "";
+  $("tiles").innerHTML = "";
+  $("today-status").hidden = true;
+  $("table-wrap").innerHTML = "";
+  $("failures-card").hidden = true;
+  for (const id of ["chart-daily", "chart-tod", "chart-weekday"]) {
+    $(id).innerHTML = '<p class="empty">Nothing to chart yet.</p>';
+  }
+  for (const id of ["csv-link", "maps-link"]) {
+    $(id).removeAttribute("href");
+    $(id).setAttribute("aria-disabled", "true");
+  }
+}
+
 /** Everything the page shows, re-read from the server. */
 async function reload() {
   await loadRoutes();
   if (!state.routeId) {
-    $("route-line").textContent = "No routes yet \u2014 add one below to start tracking.";
+    showEmptyState();
     return;
   }
+  for (const id of ["csv-link", "maps-link"]) $(id).removeAttribute("aria-disabled");
   await refresh();
 }
 
