@@ -17,12 +17,24 @@ services:
     env_file:
       - .env
     ports:
+      # Left side is the port on the Unraid/NAS host, and the only half worth
+      # changing -- set PORT in .env. The right side is fixed: inside the
+      # container the app always listens on 8080.
       - "${PORT:-8080}:8080"
     volumes:
       # Holds both the database and routes.yml, so routes added in the
       # dashboard survive a rebuild or a reboot.
       - commute-data:/data
     environment:
+      # These are pinned deliberately, and override anything in .env.
+      #
+      # HOST must be 0.0.0.0: it is the address the app binds *inside* the
+      # container's own network namespace, which never holds the host's LAN
+      # address. Setting it to the host's IP makes uvicorn fail to bind
+      # ("Cannot assign requested address") and nothing listens at all --
+      # which looks from outside exactly like a wrong port. Docker is what
+      # bridges the host's IP to the container; the app takes no part in it.
+      HOST: 0.0.0.0
       PORT: 8080
       DB_PATH: /data/commutes.db
 
