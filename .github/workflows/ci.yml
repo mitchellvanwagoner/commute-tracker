@@ -60,7 +60,15 @@ jobs:
           echo "database owner: $owner"
           test "$owner" = "99:100"
 
-      # The opposite guarantee: the process must not still be root.
+      # The opposite guarantee: the app itself must no longer be root.
+      #
+      # Read PID 1 rather than asking `docker exec`, which starts a fresh
+      # process as the image's configured user (root, since the entrypoint needs
+      # it) and would say nothing about the process actually serving requests.
+      # The entrypoint execs all the way through, so PID 1 is the app.
       - name: The app does not run as root
         run: |
-          test "$(docker exec ct-unraid id -u)" = "99"
+          uid=$(docker exec ct-unraid awk '/^Uid:/ {print $2}' /proc/1/status)
+          comm=$(docker exec ct-unraid cat /proc/1/comm)
+          echo "pid 1 is $comm running as uid $uid"
+          test "$uid" = "99"
