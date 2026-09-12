@@ -124,11 +124,25 @@ class CommuteTracker:
         }
 
     async def sample_all(self) -> list[dict]:
-        """Sample every configured route once, right now."""
+        """Sample every configured route once, right now.
+
+        One route's failure never costs another its measurement.
+        ``sample_route`` already absorbs a failed lookup, but not a failed
+        *write* -- a locked database or a full disk raises straight out of it,
+        and an unguarded gather would let that one exception discard the
+        results of every route that succeeded.
+        """
+        routes = self.active_routes()
         results = await asyncio.gather(
-            *(self.sample_route(route) for route in self.active_routes())
+            *(self.sample_route(route) for route in routes), return_exceptions=True
         )
-        return [r for r in results if r]
+        samples = []
+        for route, result in zip(routes, results, strict=True):
+            if isinstance(result, BaseException):
+                log.error("[%s] sampling failed: %s", route.id, result, exc_info=result)
+            elif result:
+                samples.append(result)
+        return samples
 
     # ----------------------------------------------------------- daily digest
 

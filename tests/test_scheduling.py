@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from commute_tracker.config import Settings
@@ -81,3 +83,51 @@ def test_a_digest_job_is_removed_with_its_route(tmp_path):
 
     tracker.unschedule_route("commute")
     assert job_ids(tracker) == set()
+
+
+def test_one_route_failing_to_store_does_not_lose_the_others(tmp_path):
+    """A failed *write* is not a failed lookup, and sample_route does not catch it.
+
+    Without return_exceptions the single raise propagates out of the gather and
+    discards the measurements every other route just made.
+    """
+    import asyncio
+
+    from commute_tracker.config import Settings
+    from commute_tracker.maps import TravelTime
+    from commute_tracker.routes import RouteStore
+    from commute_tracker.tracker import CommuteTracker
+
+    routes_file = tmp_path / "routes.yml"
+    store = RouteStore(routes_file)
+    for name in ("Alpha", "Bravo", "Charlie"):
+        store.create(
+            {
+                "name": name,
+                "origin": "A St",
+                "destination": "B Ave",
+                "window_start": "07:00",
+                "window_end": "08:00",
+                "interval_minutes": 30,
+                "days": "mon",
+                "timezone": "UTC",
+            }
+        )
+    settings = Settings(api_key="k", db_path=tmp_path / "s.db", routes_file=routes_file)
+    tracker = CommuteTracker(settings, notifiers=[])
+
+    async def travel_time(origin, destination, *, kind="sample", route_id=None):
+        return TravelTime(duration_seconds=600, static_duration_seconds=540, distance_meters=1000)
+
+    tracker.client.travel_time = travel_time
+    real_record = tracker.db.record_sample
+
+    def record(**kwargs):
+        if kwargs["route_id"] == "bravo":
+            raise sqlite3.OperationalError("database is locked")
+        return real_record(**kwargs)
+
+    tracker.db.record_sample = record
+
+    results = asyncio.run(tracker.sample_all())
+    assert sorted(r["route_id"] for r in results) == ["alpha", "charlie"]
