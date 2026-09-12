@@ -72,3 +72,48 @@ jobs:
           comm=$(docker exec ct-unraid cat /proc/1/comm)
           echo "pid 1 is $comm running as uid $uid"
           test "$uid" = "99"
+
+      # The compose file is the thing Unraid actually runs, and nothing above
+      # touches it -- every step so far calls `docker run` with explicit -e
+      # flags, which cannot reproduce how `env_file:` and `environment:`
+      # interact.
+      #
+      # PORT is the trap. It means two different things: the host port to
+      # publish, and the port the app binds inside. `${PORT}` in `ports:` is
+      # interpolated from .env, while `environment:` pins PORT=8080 inside the
+      # container -- so the two halves must disagree, and only that pin keeps
+      # them apart. Drop it and .env's PORT reaches the app, uvicorn binds 8189
+      # inside, the mapping still forwards host 8189 to container 8080, and
+      # nothing listens there. The image's own HEALTHCHECK curls $PORT too, so
+      # it follows the app to 8189 and reports healthy the whole time.
+      #
+      # Hence a host port deliberately unequal to 8080: reaching /healthz on
+      # 8189 from outside is only possible if the app bound 8080 inside.
+      - name: The compose file publishes a host port that is not the app's
+        run: |
+          set -euo pipefail
+          # No `build:` key, by design -- build under the name compose expects.
+          docker build -t ghcr.io/mitchellvanwagoner/commute-tracker:latest .
+          cat > .env <<'EOF'
+          GOOGLE_MAPS_API_KEY=ci-placeholder
+          PORT=8189
+          EOF
+          docker compose up -d
+          for _ in $(seq 1 20); do
+            if curl -fsS http://localhost:8189/healthz; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8189/healthz || {
+            docker compose ps
+            docker compose logs
+            exit 1
+          }
+          # Says the same thing from the inside, so a failure names the cause
+          # rather than just "the port is shut".
+          docker compose exec -T commute-tracker \
+            curl -fsS http://localhost:8080/healthz > /dev/null || {
+            echo "app is not listening on 8080 inside the container -- PORT leaked in"
+            docker compose logs
+            exit 1
+          }
+          docker compose down -v
