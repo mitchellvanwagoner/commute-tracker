@@ -7,6 +7,7 @@ handful of rows per day, and it keeps the scheduler and web threads independent.
 
 from __future__ import annotations
 
+import math
 import os
 import sqlite3
 from collections.abc import Iterator
@@ -497,8 +498,14 @@ class Database:
 
 
 def _percentile(sorted_values: list[int], fraction: float) -> float | None:
-    """Nearest-rank percentile over an already-sorted list."""
+    """Nearest-rank percentile over an already-sorted list.
+
+    ``ceil``, not ``round``: Python rounds halves to even, so a rank landing
+    exactly on .5 -- which is every fifth length -- would come out one place too
+    low, and p90 of five samples would report the second-slowest trip.
+    """
     if not sorted_values:
         return None
-    index = max(0, min(len(sorted_values) - 1, round(fraction * len(sorted_values)) - 1))
+    rank = math.ceil(fraction * len(sorted_values))
+    index = max(0, min(len(sorted_values) - 1, rank - 1))
     return float(sorted_values[index])

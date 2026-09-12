@@ -187,3 +187,11 @@ def test_days_window_is_stable_across_every_reader(db):
     assert len(db.samples("commute", days=3, today=today)) == 4
     assert db.time_of_day_stats("commute", days=3, today=today)[0]["samples"] == 4
     assert sum(r["samples"] for r in db.weekday_stats("commute", days=3, today=today)) == 4
+
+
+def test_p90_uses_nearest_rank(db):
+    """round() is banker's rounding, so a rank landing on .5 came out one low."""
+    for index, seconds in enumerate((100, 200, 300, 400, 500), start=1):
+        add(db, date=f"2026-04-{index:02d}", clock="07:00", seconds=seconds)
+    # Nearest-rank p90 of five values is ceil(0.9 * 5) = the 5th, not the 4th.
+    assert db.summary("commute")["p90_seconds"] == 500.0
