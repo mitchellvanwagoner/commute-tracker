@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import httpx
 import pytest
 
@@ -10,7 +13,7 @@ from commute_tracker.db import Database
 from commute_tracker.maps import BudgetExceededError, MapsError, RoutesClient
 from commute_tracker.routes import RouteStore
 from commute_tracker.tracker import CommuteTracker
-from commute_tracker.usage import CallBudget
+from commute_tracker.usage import BILLING_TIMEZONE, CallBudget
 
 ROUTE_SPEC = {
     "name": "Morning commute",
@@ -216,3 +219,32 @@ async def test_the_test_button_is_recorded_as_a_test_not_a_sample(tmp_path):
         ).status_code == 200
 
     assert tracker.db.api_calls_by_kind(tracker.budget.billing_month()) == {"validate": 1}
+
+
+def test_month_end_projection_does_not_count_today_twice(tmp_path):
+    """`used` already holds today's calls, so today is not still to come.
+
+    Pricing today on both sides adds a day of sampling that has in fact been
+    counted, nudging the overage warning earlier than the schedule earns.
+    """
+    db = Database(tmp_path / "proj.db")
+    budget = CallBudget(db, limit=1000)
+    # 30 calls a month over a 30-day month is one a day. Stand on the last day
+    # of the month with that day's call already spent: nothing is left to come,
+    # so the projection is exactly what the meter reads.
+    budget.now = lambda: datetime(2026, 4, 30, 18, 0, tzinfo=ZoneInfo(BILLING_TIMEZONE))
+    budget.record(kind="sample")
+    snapshot = budget.snapshot(calls_per_month=30)
+    assert snapshot["used"] == 1
+    assert snapshot["days_left_in_month"] == 1
+    assert snapshot["projected_month_end"] == 1
+
+
+def test_month_end_projection_prices_the_days_still_to_come(tmp_path):
+    db = Database(tmp_path / "proj2.db")
+    budget = CallBudget(db, limit=1000)
+    # The 1st of a 30-day month: today is spent, 29 days remain to pay for.
+    budget.now = lambda: datetime(2026, 4, 1, 18, 0, tzinfo=ZoneInfo(BILLING_TIMEZONE))
+    budget.record(kind="sample")
+    snapshot = budget.snapshot(calls_per_month=30)
+    assert snapshot["projected_month_end"] == 1 + 29

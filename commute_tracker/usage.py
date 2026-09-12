@@ -132,7 +132,14 @@ class CallBudget:
         projection = Projection(calls_per_month=calls_per_month, used=used, limit=self.limit)
         # What the rest of this month costs at the current schedule, added to
         # what is already spent: the honest answer to "will I go over?".
-        rest_of_month = round(calls_per_month * self.days_left_in_month() / days_in_month)
+        #
+        # Today is excluded from the days still to pay for, because `used` is a
+        # live count that already contains today's calls. Pricing it on both
+        # sides would add a day of sampling that has, in fact, already been
+        # counted -- every day of the month, a little closer to a warning the
+        # schedule has not earned.
+        days_to_come = max(0, self.days_left_in_month() - 1)
+        rest_of_month = round(calls_per_month * days_to_come / days_in_month)
         return {
             "billing_month": self.billing_month(),
             "used": used,
