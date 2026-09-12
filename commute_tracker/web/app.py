@@ -10,10 +10,11 @@ import csv
 import io
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import ConfigError, Route, Settings, load_settings
@@ -78,6 +79,16 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
             raise HTTPException(status_code=404, detail=f"Unknown route {route_id!r}")
         return route
 
+    def _local_today(route_id: str):
+        """The route's own current date, which anchors every "last N days" window.
+
+        A route deleted from routes.yml keeps its samples and stays queryable,
+        and there is no timezone left to ask; None then lets the database fall
+        back to UTC.
+        """
+        route = tracker.store.get(route_id)
+        return datetime.now(route.tzinfo).date() if route else None
+
     def _resolve(route_id: str | None) -> str:
         """Default to the first configured route when none is given."""
         if route_id:
@@ -87,9 +98,31 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
             return routes[0].id
         raise HTTPException(status_code=404, detail="No routes are configured")
 
+    # routes.yml is re-read whenever it changes on disk, so a hand edit can put a
+    # parse error in front of any request that touches it. Left to FastAPI a
+    # ConfigError is a 500 -- an unexplained failure, from an endpoint that has
+    # the explanation right there in the exception. Worse, the dashboard is the
+    # only place to repair a broken route, so a 500 on the routes endpoints
+    # strands the install on exactly the file it cannot load. 400 with the
+    # parser's own message keeps the page up and says which line to fix.
+    @app.exception_handler(ConfigError)
+    async def _config_error(request: Request, exc: ConfigError):
+        log.warning("%s: %s", request.url.path, exc)
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
     @app.get("/healthz")
     async def healthz():
-        return {"status": "ok", "routes": [r.id for r in tracker.routes]}
+        """Liveness, which a broken routes.yml does not disprove.
+
+        The container is serving; a config file it cannot parse is a thing to
+        report, not to die of. Returning 500 here would fail the image's
+        HEALTHCHECK and have the orchestrator restart -- or keep restarting --
+        a process that would come up in precisely the same state.
+        """
+        try:
+            return {"status": "ok", "routes": [r.id for r in tracker.routes]}
+        except ConfigError as exc:
+            return {"status": "ok", "routes": [], "config_error": str(exc)}
 
     @app.get("/api/routes")
     async def api_routes():
@@ -226,14 +259,15 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         route_id = _resolve(route)
         db = tracker.db
         configured = tracker.store.get(route_id)
+        today = datetime.now(configured.tzinfo).date() if configured else None
         return {
             "route_id": route_id,
             "days": days,
             "report": tracker.report_for(configured).as_dict() if configured else None,
-            "summary": db.summary(route_id, days=days),
-            "daily": db.daily_stats(route_id, days=days),
-            "time_of_day": db.time_of_day_stats(route_id, days=days),
-            "weekday": db.weekday_stats(route_id, days=days),
+            "summary": db.summary(route_id, days=days, today=today),
+            "daily": db.daily_stats(route_id, days=days, today=today),
+            "time_of_day": db.time_of_day_stats(route_id, days=days, today=today),
+            "weekday": db.weekday_stats(route_id, days=days, today=today),
             "failures": db.recent_failures(route_id),
         }
 
@@ -242,7 +276,8 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         route: str | None = None,
         days: int | None = Query(default=None, ge=1, le=3650),
     ):
-        return tracker.db.samples(_resolve(route), days=days)
+        route_id = _resolve(route)
+        return tracker.db.samples(route_id, days=days, today=_local_today(route_id))
 
     @app.get("/api/samples.csv")
     async def api_samples_csv(
@@ -251,7 +286,7 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
     ):
         """Download the raw samples for a route as CSV."""
         route_id = _resolve(route)
-        rows = tracker.db.samples(route_id, days=days)
+        rows = tracker.db.samples(route_id, days=days, today=_local_today(route_id))
         buffer = io.StringIO()
         columns = [
             "local_date",

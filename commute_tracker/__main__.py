@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import logging
 import sys
+from datetime import datetime
 
 from .config import ConfigError, load_settings
 from .tracker import CommuteTracker
@@ -70,7 +71,11 @@ def cmd_sample(args) -> int:
 def cmd_stats(args) -> int:
     tracker = CommuteTracker(load_settings())
     for route in tracker.routes:
-        summary = tracker.db.summary(route.id, days=args.days)
+        # Counted from the route's own date, not the machine's: --days 7 must
+        # mean the same week whichever timezone the query runs in.
+        summary = tracker.db.summary(
+            route.id, days=args.days, today=datetime.now(route.tzinfo).date()
+        )
         print(f"\n{route.name} ({route.origin} -> {route.destination})")
         if not summary["samples"]:
             print("  no samples yet")

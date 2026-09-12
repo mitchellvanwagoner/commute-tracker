@@ -25,7 +25,16 @@ const WEEKDAY_NAMES = {
 
 async function getJSON(url) {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  if (!response.ok) {
+    // Prefer the server's own explanation. A malformed routes.yml comes back
+    // as a 400 whose detail names the offending line, and "400 Bad Request"
+    // on its own would throw that away.
+    const detail = await response
+      .json()
+      .then((body) => body?.detail)
+      .catch(() => null);
+    throw new Error(detail || `${response.status} ${response.statusText}`);
+  }
   return response.json();
 }
 

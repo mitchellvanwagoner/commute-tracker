@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -151,3 +151,39 @@ def test_a_storage_error_is_a_config_error(tmp_path):
 def test_a_missing_parent_directory_is_created(tmp_path):
     db = Database(tmp_path / "nested" / "deeper" / "commutes.db")
     assert db.path.exists()
+
+
+# ------------------------------------------------------------- date windows
+
+
+def test_days_window_is_anchored_to_the_supplied_local_date(db):
+    """`days` counts back from the route's own date, not the machine's clock.
+
+    local_date is written in the route's timezone, so comparing it against
+    SQLite's UTC date('now') makes the window's size depend on the hour the
+    query happens to run -- eight local days in the morning, seven after dark.
+    """
+    for day in range(1, 11):
+        add(db, date=f"2026-03-{day:02d}", clock="07:00", seconds=600)
+
+    rows = db.daily_stats("commute", days=3, today=date(2026, 3, 10))
+    assert [r["local_date"] for r in rows] == [
+        "2026-03-07",
+        "2026-03-08",
+        "2026-03-09",
+        "2026-03-10",
+    ]
+
+    # The same request anchored a day later drops the oldest day and nothing else.
+    rows = db.daily_stats("commute", days=3, today=date(2026, 3, 11))
+    assert [r["local_date"] for r in rows][0] == "2026-03-08"
+
+
+def test_days_window_is_stable_across_every_reader(db):
+    for day in range(1, 11):
+        add(db, date=f"2026-03-{day:02d}", clock="07:00", seconds=600)
+    today = date(2026, 3, 10)
+    assert db.summary("commute", days=3, today=today)["samples"] == 4
+    assert len(db.samples("commute", days=3, today=today)) == 4
+    assert db.time_of_day_stats("commute", days=3, today=today)[0]["samples"] == 4
+    assert sum(r["samples"] for r in db.weekday_stats("commute", days=3, today=today)) == 4

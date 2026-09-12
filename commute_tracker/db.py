@@ -11,7 +11,8 @@ import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from datetime import date as date_type
 from pathlib import Path
 from statistics import median
 
@@ -307,9 +308,11 @@ class Database:
                 is not None
             )
 
-    def summary(self, route_id: str, *, days: int | None = None) -> dict:
+    def summary(
+        self, route_id: str, *, days: int | None = None, today: date_type | None = None
+    ) -> dict:
         """Min / max / average / median across the tracked history."""
-        where, params = self._window(route_id, days)
+        where, params = self._window(route_id, days, today=today)
         with self.connect() as conn:
             row = conn.execute(
                 f"""
@@ -352,6 +355,7 @@ class Database:
         days: int | None = None,
         since: str | None = None,
         until: str | None = None,
+        today: date_type | None = None,
     ) -> list[dict]:
         """One row per day: min, max, average and sample count.
 
@@ -359,7 +363,7 @@ class Database:
         bounds (inclusive), which is what the daily report needs so its baseline
         does not depend on the wall clock at the moment of the query.
         """
-        where, params = self._window(route_id, days, since=since, until=until)
+        where, params = self._window(route_id, days, since=since, until=until, today=today)
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
@@ -377,9 +381,11 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def time_of_day_stats(self, route_id: str, *, days: int | None = None) -> list[dict]:
+    def time_of_day_stats(
+        self, route_id: str, *, days: int | None = None, today: date_type | None = None
+    ) -> list[dict]:
         """One row per clock time in the window, aggregated across every day."""
-        where, params = self._window(route_id, days)
+        where, params = self._window(route_id, days, today=today)
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
@@ -396,9 +402,11 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def weekday_stats(self, route_id: str, *, days: int | None = None) -> list[dict]:
+    def weekday_stats(
+        self, route_id: str, *, days: int | None = None, today: date_type | None = None
+    ) -> list[dict]:
         """One row per weekday, aggregated across every occurrence of that day."""
-        where, params = self._window(route_id, days)
+        where, params = self._window(route_id, days, today=today)
         order = (
             "CASE weekday WHEN 'mon' THEN 1 WHEN 'tue' THEN 2 WHEN 'wed' THEN 3 "
             "WHEN 'thu' THEN 4 WHEN 'fri' THEN 5 WHEN 'sat' THEN 6 ELSE 7 END"
@@ -419,9 +427,16 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def samples(self, route_id: str, *, days: int | None = None, limit: int = 20000) -> list[dict]:
+    def samples(
+        self,
+        route_id: str,
+        *,
+        days: int | None = None,
+        limit: int = 20000,
+        today: date_type | None = None,
+    ) -> list[dict]:
         """Raw samples, oldest first, for scatter plots and CSV export."""
-        where, params = self._window(route_id, days)
+        where, params = self._window(route_id, days, today=today)
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
@@ -455,13 +470,23 @@ class Database:
         *,
         since: str | None = None,
         until: str | None = None,
+        today: date_type | None = None,
     ) -> tuple[str, tuple]:
-        """Build the shared WHERE clause for a route over an optional date window."""
+        """Build the shared WHERE clause for a route over an optional date window.
+
+        ``today`` anchors a ``days`` window, and should be the route's *local*
+        date. SQLite's own ``date('now')`` is UTC, and ``local_date`` is not:
+        west of Greenwich the two disagree for the last hours of every evening,
+        so the same "last 7 days" request would answer with eight days of data
+        in the morning and seven after dark. Defaults to the UTC date, which is
+        the best guess available when the caller knows of no timezone.
+        """
         clauses = ["route_id = ?"]
         params: list = [route_id]
         if days:
-            clauses.append("local_date >= date('now', ?)")
-            params.append(f"-{int(days)} days")
+            anchor = today or datetime.now(UTC).date()
+            clauses.append("local_date >= ?")
+            params.append((anchor - timedelta(days=int(days))).isoformat())
         if since:
             clauses.append("local_date >= ?")
             params.append(since)

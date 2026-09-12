@@ -107,3 +107,53 @@ def test_static_assets_must_be_revalidated(client):
         response = client.get(path)
         assert response.status_code == 200, path
         assert response.headers["cache-control"] == "no-cache", path
+
+
+# ------------------------------------------------- a routes.yml that will not parse
+
+
+BROKEN_YAML = """\
+routes:
+  - id: a
+    name: A
+    origin: X
+    destination: Y
+    days: mon,funday
+"""
+
+
+@pytest.fixture()
+def broken_client(tmp_path):
+    routes_file = tmp_path / "routes.yml"
+    routes_file.write_text(BROKEN_YAML, encoding="utf-8")
+    settings = Settings(
+        api_key="k", db_path=tmp_path / "broken.db", routes_file=routes_file
+    )
+    return TestClient(create_app(settings, run_scheduler=False), raise_server_exceptions=False)
+
+
+def test_healthz_survives_an_unparseable_routes_file(broken_client):
+    """Liveness is about the process, which a bad config file does not disprove.
+
+    A 500 here fails the image's HEALTHCHECK and has the orchestrator restart a
+    container that would come back up in exactly the same state.
+    """
+    response = broken_client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert "funday" in response.json()["config_error"]
+
+
+def test_routes_endpoint_explains_the_parse_error(broken_client):
+    """400 with the parser's message, not an unexplained 500.
+
+    The dashboard is the only place to repair a route, so the endpoints behind
+    it must stay loadable and say what is wrong with the file.
+    """
+    response = broken_client.get("/api/routes")
+    assert response.status_code == 400
+    assert "funday" in response.json()["detail"]
+
+
+def test_the_dashboard_shell_still_loads(broken_client):
+    assert broken_client.get("/").status_code == 200
