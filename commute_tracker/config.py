@@ -39,9 +39,20 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
     if raw is None or not raw.strip():
         return default
     try:
-        return max(minimum, int(raw))
+        return max(minimum, int(raw.strip()))
     except ValueError as exc:
         raise ConfigError(f"{name} must be a whole number, got {raw!r}") from exc
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    """Read a decimal setting. The float counterpart of :func:`_env_int`."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return max(minimum, float(raw.strip()))
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a number, got {raw!r}") from exc
 
 
 # Cost guards. Every sample is a billed Routes API call, so a slip in the route
@@ -292,15 +303,20 @@ def load_settings() -> Settings:
         db_path=db_path,
         routes_file=routes_file,
         host=os.getenv("HOST", "0.0.0.0"),
-        port=int(os.getenv("PORT", "8080")),
+        # Every number here goes through the _env* helpers rather than a bare
+        # int()/float(). Those raise a plain ValueError, which is not a
+        # ConfigError, so nothing catches it and a single typo in .env -- a
+        # trailing comment, a stray blank, a decimal comma -- takes the
+        # container down on a traceback that never names the variable at fault.
+        port=_env_int("PORT", 8080),
         traffic_model=os.getenv("TRAFFIC_MODEL", "TRAFFIC_AWARE"),
-        request_timeout=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20")),
+        request_timeout=_env_float("REQUEST_TIMEOUT_SECONDS", 20.0, minimum=0.1),
         free_tier_calls=_env_int("FREE_TIER_CALLS_PER_MONTH", FREE_TIER_CALLS, minimum=0),
         billing_timezone=os.getenv("BILLING_TIMEZONE", BILLING_TIMEZONE),
         address_provider=os.getenv("ADDRESS_PROVIDER", "photon"),
         notify=NotifySettings(
-            baseline_days=int(os.getenv("NOTIFY_BASELINE_DAYS", "30")),
-            min_baseline_days=int(os.getenv("NOTIFY_MIN_BASELINE_DAYS", "5")),
-            threshold=float(os.getenv("NOTIFY_THRESHOLD_SIGMA", "1.0")),
+            baseline_days=_env_int("NOTIFY_BASELINE_DAYS", 30),
+            min_baseline_days=_env_int("NOTIFY_MIN_BASELINE_DAYS", 5),
+            threshold=_env_float("NOTIFY_THRESHOLD_SIGMA", 1.0),
         ),
     )

@@ -2,7 +2,13 @@ from datetime import time
 
 import pytest
 
-from commute_tracker.config import ConfigError, Route, parse_days, parse_time
+from commute_tracker.config import (
+    ConfigError,
+    Route,
+    load_settings,
+    parse_days,
+    parse_time,
+)
 
 
 def make_route(**overrides) -> Route:
@@ -102,3 +108,65 @@ def test_a_realistic_window_is_unaffected():
     route = make_route(window_start="07:00", window_end="09:00", interval_minutes=15)
     assert len(route.sample_times()) == 9
     assert route.cost_guard_error() is None
+
+
+# --------------------------------------------------------- numeric env vars
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "8189 # dashboard",  # dotenv keeps a trailing comment
+        "abc",
+        "80 80",
+    ],
+)
+def test_malformed_port_is_a_config_error(monkeypatch, value):
+    """A typo in .env must name the variable, not die on a bare ValueError.
+
+    A plain int() raises ValueError, which is not a ConfigError, so nothing
+    catches it and the container exits on a traceback that says only
+    "invalid literal for int()" -- with no hint of which setting was at fault.
+    """
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "key")
+    monkeypatch.setenv("PORT", value)
+    with pytest.raises(ConfigError, match="PORT"):
+        load_settings()
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_blank_port_falls_back_to_the_default(monkeypatch, value):
+    """`PORT=` in .env means "not set", not "set to nonsense"."""
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "key")
+    monkeypatch.setenv("PORT", value)
+    assert load_settings().port == 8080
+
+
+def test_malformed_threshold_is_a_config_error(monkeypatch):
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "key")
+    monkeypatch.setenv("NOTIFY_THRESHOLD_SIGMA", "1,0")  # a decimal comma
+    with pytest.raises(ConfigError, match="NOTIFY_THRESHOLD_SIGMA"):
+        load_settings()
+
+
+def test_numeric_settings_tolerate_surrounding_space(monkeypatch):
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "key")
+    monkeypatch.setenv("PORT", " 8189 ")
+    monkeypatch.setenv("NOTIFY_THRESHOLD_SIGMA", " 1.5 ")
+    monkeypatch.setenv("NOTIFY_BASELINE_DAYS", "14")
+    settings = load_settings()
+    assert settings.port == 8189
+    assert settings.notify.threshold == 1.5
+    assert settings.notify.baseline_days == 14
+
+
+def test_unset_numeric_settings_fall_back_to_defaults(monkeypatch):
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "key")
+    for name in ("PORT", "NOTIFY_THRESHOLD_SIGMA", "REQUEST_TIMEOUT_SECONDS"):
+        monkeypatch.delenv(name, raising=False)
+    settings = load_settings()
+    assert (settings.port, settings.notify.threshold, settings.request_timeout) == (
+        8080,
+        1.0,
+        20.0,
+    )
