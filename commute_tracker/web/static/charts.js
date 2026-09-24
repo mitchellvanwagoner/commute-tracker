@@ -149,15 +149,19 @@ const Charts = (() => {
   }
 
   /**
-   * Min-max band with an average line.
-   * rows: [{ label, min, max, avg, ...extra }]
+   * Shaded band with an average line.
+   * rows: [{ label, lo, hi, avg, min, max, ...extra }]
+   *
+   * `lo`/`hi` are what gets shaded -- the quartiles, so the shape reads as the
+   * typical range rather than being stretched by one freak trip. `min`/`max`
+   * are the outright extremes: reported in the tooltip, deliberately not drawn.
    */
   function bandChart(container, rows, options = {}) {
     const {
       formatValue = (v) => v.toFixed(1),
       unit = "min",
       tooltip = (row) => row.label,
-      bandLabel = "Fastest - slowest",
+      bandLabel = "Middle half of trips",
       lineLabel = "Average",
       emptyMessage = "No samples yet.",
     } = options;
@@ -185,9 +189,13 @@ const Charts = (() => {
     const geo = frame(container, { margin });
     const { svg, innerW, innerH } = geo;
 
+    // Scaled to what is drawn, not to the extremes -- otherwise trimming the
+    // outliers out of the band would leave the plot zoomed out around them
+    // anyway. The average is included because a skewed day can push it outside
+    // its own quartiles, and a clipped line would be worse than a taller axis.
     const scale = niceScale(
-      Math.min(...rows.map((r) => r.min)),
-      Math.max(...rows.map((r) => r.max))
+      Math.min(...rows.map((r) => Math.min(r.lo, r.avg))),
+      Math.max(...rows.map((r) => Math.max(r.hi, r.avg)))
     );
     const xAt = (index) =>
       rows.length === 1
@@ -198,12 +206,12 @@ const Charts = (() => {
 
     axes(svg, geo, margin, scale, colors, (v) => formatValue(v));
 
-    // Band: forward along the maxima, back along the minima.
-    const forward = rows.map((row, i) => `${i === 0 ? "M" : "L"}${xAt(i)},${yAt(row.max)}`);
+    // Band: forward along the upper edge, back along the lower one.
+    const forward = rows.map((row, i) => `${i === 0 ? "M" : "L"}${xAt(i)},${yAt(row.hi)}`);
     const backward = rows
       .map((row, i) => ({ row, i }))
       .reverse()
-      .map(({ row, i }) => `L${xAt(i)},${yAt(row.min)}`);
+      .map(({ row, i }) => `L${xAt(i)},${yAt(row.lo)}`);
     svg.append(
       el("path", {
         d: `${forward.join("")}${backward.join("")}Z`,
@@ -287,6 +295,7 @@ const Charts = (() => {
         event,
         `<div class="t-title">${tooltip(row)}</div>` +
           `<div class="t-row">Average <b>${formatValue(row.avg)} ${unit}</b></div>` +
+          `<div class="t-row">Middle half <b>${formatValue(row.lo)}</b> &ndash; <b>${formatValue(row.hi)}</b></div>` +
           `<div class="t-row">Fastest <b>${formatValue(row.min)}</b> &middot; Slowest <b>${formatValue(row.max)}</b></div>` +
           `<div class="t-row">${row.samples ?? 0} sample${row.samples === 1 ? "" : "s"}</div>`
       );

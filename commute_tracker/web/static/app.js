@@ -120,6 +120,8 @@ function renderCharts(stats) {
     $("chart-daily"),
     stats.daily.map((row) => ({
       label: dayLabel(row.local_date),
+      lo: minutes(row.p25_seconds),
+      hi: minutes(row.p75_seconds),
       min: minutes(row.min_seconds),
       max: minutes(row.max_seconds),
       avg: minutes(row.avg_seconds),
@@ -129,7 +131,7 @@ function renderCharts(stats) {
     })),
     {
       tooltip: (row) => `${WEEKDAY_NAMES[row.weekday] ?? ""} ${row.date}`.trim(),
-      bandLabel: "Fastest – slowest that day",
+      bandLabel: "Middle half of that day’s trips",
       lineLabel: "Daily average",
       emptyMessage: "No samples yet — the first ones land during the next tracked window.",
     }
@@ -139,6 +141,8 @@ function renderCharts(stats) {
     $("chart-tod"),
     stats.time_of_day.map((row) => ({
       label: row.local_time,
+      lo: minutes(row.p25_seconds),
+      hi: minutes(row.p75_seconds),
       min: minutes(row.min_seconds),
       max: minutes(row.max_seconds),
       avg: minutes(row.avg_seconds),
@@ -146,7 +150,7 @@ function renderCharts(stats) {
     })),
     {
       tooltip: (row) => `Departing ${row.label}`,
-      bandLabel: "Best – worst day at that time",
+      bandLabel: "Middle half of days at that time",
       lineLabel: "Average at that time",
       emptyMessage: "No samples yet.",
     }

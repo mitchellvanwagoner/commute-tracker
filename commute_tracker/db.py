@@ -358,7 +358,7 @@ class Database:
         until: str | None = None,
         today: date_type | None = None,
     ) -> list[dict]:
-        """One row per day: min, max, average and sample count.
+        """One row per day: min, max, quartiles, average and sample count.
 
         ``days`` is relative to today; ``since``/``until`` are explicit ``YYYY-MM-DD``
         bounds (inclusive), which is what the daily report needs so its baseline
@@ -380,7 +380,8 @@ class Database:
                 """,
                 params,
             ).fetchall()
-        return [dict(row) for row in rows]
+            quartiles = self._quartiles_by(conn, "local_date", where, params)
+        return [{**dict(row), **quartiles[row["local_date"]]} for row in rows]
 
     def time_of_day_stats(
         self, route_id: str, *, days: int | None = None, today: date_type | None = None
@@ -401,7 +402,38 @@ class Database:
                 """,
                 params,
             ).fetchall()
-        return [dict(row) for row in rows]
+            quartiles = self._quartiles_by(conn, "local_time", where, params)
+        return [{**dict(row), **quartiles[row["local_time"]]} for row in rows]
+
+    @staticmethod
+    def _quartiles_by(conn, column: str, where: str, params: tuple) -> dict[str, dict]:
+        """p25/p75 of the durations in each group, keyed by that group's value.
+
+        SQLite has no percentile aggregate, so the rows come back sorted within
+        each group and the ranks are taken here -- a few dozen samples per group,
+        which is nothing to walk in Python.
+
+        These are what the dashboard shades, in place of the outright fastest and
+        slowest trip: one lucky empty road or one crash should not be what the
+        eye reads as the range. Nearest rank, so both edges are a trip that was
+        actually measured; a group with only a sample or two therefore collapses
+        back onto its own min and max, which is the honest answer when there is
+        no middle half to speak of.
+        """
+        grouped: dict[str, list[int]] = {}
+        for key, duration in conn.execute(
+            f"SELECT {column}, duration_seconds FROM samples {where} "
+            f"ORDER BY {column}, duration_seconds",
+            params,
+        ):
+            grouped.setdefault(key, []).append(duration)
+        return {
+            key: {
+                "p25_seconds": _percentile(values, 0.25),
+                "p75_seconds": _percentile(values, 0.75),
+            }
+            for key, values in grouped.items()
+        }
 
     def weekday_stats(
         self, route_id: str, *, days: int | None = None, today: date_type | None = None

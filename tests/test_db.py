@@ -63,6 +63,8 @@ def test_daily_stats_group_by_local_date(db):
         "min_seconds": 600,
         "max_seconds": 1200,
         "avg_seconds": 900,
+        "p25_seconds": 600.0,
+        "p75_seconds": 1200.0,
     }
 
 
@@ -195,3 +197,30 @@ def test_p90_uses_nearest_rank(db):
         add(db, date=f"2026-04-{index:02d}", clock="07:00", seconds=seconds)
     # Nearest-rank p90 of five values is ceil(0.9 * 5) = the 5th, not the 4th.
     assert db.summary("commute")["p90_seconds"] == 500.0
+
+
+def test_daily_quartiles_exclude_the_fastest_and_slowest_quarter(db):
+    for minute, seconds in enumerate((100, 500, 600, 700, 800, 900, 1000, 9000)):
+        add(db, date="2026-05-04", clock=f"07:{minute:02d}", seconds=seconds)
+
+    row = db.daily_stats("commute")[0]
+    assert (row["min_seconds"], row["max_seconds"]) == (100, 9000)
+    # Nearest rank over eight samples: the 2nd and the 6th.
+    assert (row["p25_seconds"], row["p75_seconds"]) == (500.0, 900.0)
+
+
+def test_time_of_day_quartiles_are_taken_per_clock_time(db):
+    for day, seconds in enumerate((600, 700, 800, 5000), start=1):
+        add(db, date=f"2026-05-{day:02d}", clock="07:00", seconds=seconds)
+        add(db, date=f"2026-05-{day:02d}", clock="07:30", seconds=seconds * 2)
+
+    by_time = {row["local_time"]: row for row in db.time_of_day_stats("commute")}
+    assert (by_time["07:00"]["p25_seconds"], by_time["07:00"]["p75_seconds"]) == (600.0, 800.0)
+    assert (by_time["07:30"]["p25_seconds"], by_time["07:30"]["p75_seconds"]) == (1200.0, 1600.0)
+
+
+def test_quartiles_of_a_single_sample_collapse_onto_it(db):
+    add(db, date="2026-06-01", clock="07:00", seconds=840)
+
+    row = db.daily_stats("commute")[0]
+    assert row["p25_seconds"] == row["p75_seconds"] == 840.0
