@@ -69,7 +69,7 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
         yield
         await tracker.shutdown()
 
-    app = FastAPI(title="Commute Tracker", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Commute Tracker", version="0.2.0", lifespan=lifespan)
     app.state.tracker = tracker
     app.state.settings = settings
 
