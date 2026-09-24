@@ -157,6 +157,12 @@ def test_no_warning_when_the_schedule_fits(tmp_path):
 
 def test_warns_when_the_schedule_would_run_past_the_allowance(tmp_path):
     tracker = make_tracker(tmp_path, limit=100)
+    # Pinned to the 1st of the month, because this is the wording for *this
+    # month's* prorated overage -- and a schedule stops having one once enough
+    # of the month has already run. Left on the wall clock the assertion held
+    # for the first days of a month and failed for the rest of it, which is a
+    # test that reports the calendar rather than the code.
+    tracker.budget.now = lambda: datetime(2026, 4, 1, 18, 0, tzinfo=ZoneInfo(BILLING_TIMEZONE))
     warning = tracker.overage_warning()
     assert warning is not None
     assert "over the 100 free-tier allowance" in warning
