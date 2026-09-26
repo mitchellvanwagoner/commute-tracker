@@ -1,6 +1,6 @@
 [project]
 name = "commute-tracker"
-version = "0.2.0"
+version = "0.3.0"
 description = "Track and graph Google Maps driving times for a commute over a daily window"
 requires-python = ">=3.11"
 readme = "README.md"
