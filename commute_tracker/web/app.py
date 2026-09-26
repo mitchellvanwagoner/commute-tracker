@@ -268,6 +268,11 @@ def create_app(settings: Settings | None = None, *, run_scheduler: bool = True) 
             "daily": db.daily_stats(route_id, days=days, today=today),
             "time_of_day": db.time_of_day_stats(route_id, days=days, today=today),
             "weekday": db.weekday_stats(route_id, days=days, today=today),
+            # Drawn over the time-of-day profile, so today can be read against
+            # the usual curve as it happens.
+            "today": db.samples(route_id, since=today.isoformat(), until=today.isoformat())
+            if today
+            else [],
             "failures": db.recent_failures(route_id),
         }
 

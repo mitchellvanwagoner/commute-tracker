@@ -465,11 +465,13 @@ class Database:
         route_id: str,
         *,
         days: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
         limit: int = 20000,
         today: date_type | None = None,
     ) -> list[dict]:
         """Raw samples, oldest first, for scatter plots and CSV export."""
-        where, params = self._window(route_id, days, today=today)
+        where, params = self._window(route_id, days, since=since, until=until, today=today)
         with self.connect() as conn:
             rows = conn.execute(
                 f"""

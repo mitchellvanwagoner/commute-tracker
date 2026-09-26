@@ -100,10 +100,14 @@ function renderReport(report) {
   pill.hidden = false;
   $("today-dot").style.background = report.color;
   const parts = [report.label];
+  // Mid-window the day is judged on where it is heading, not its average so
+  // far -- which, with the fast early trips only, would always read light.
+  const dayAvg = report.projected_avg_seconds ?? report.avg_seconds;
+  const lead = report.in_progress ? "on track for" : "today";
   if (report.samples && report.delta_percent != null) {
     const direction = report.delta_percent >= 0 ? "slower" : "faster";
     parts.push(
-      `today ${(report.avg_seconds / 60).toFixed(1)} min, ` +
+      `${lead} ${(dayAvg / 60).toFixed(1)} min, ` +
         `${Math.abs(report.delta_percent).toFixed(0)}% ${direction} than normal`
     );
   } else if (report.samples) {
@@ -113,6 +117,23 @@ function renderReport(report) {
   }
   $("today-text").textContent = parts.join(" · ");
   if (report.maps_url) $("maps-link").href = report.maps_url;
+}
+
+/**
+ * Today's line for the time-of-day chart, one entry per chart row: what each
+ * time measured today, then the report's projection for the times to come.
+ */
+function todayOverlay(rows, stats) {
+  const byTime = new Map();
+  for (const point of stats.report?.projection ?? []) {
+    byTime.set(point.local_time, { value: minutes(point.seconds), measured: point.measured });
+  }
+  // Measured samples win over the projection's copy, and are drawn even when
+  // there is no baseline yet to project from.
+  for (const sample of stats.today ?? []) {
+    byTime.set(sample.local_time, { value: minutes(sample.duration_seconds), measured: true });
+  }
+  return rows.map((row) => byTime.get(row.local_time) ?? null);
 }
 
 function renderCharts(stats) {
@@ -152,6 +173,9 @@ function renderCharts(stats) {
       tooltip: (row) => `Departing ${row.label}`,
       bandLabel: "Middle half of days at that time",
       lineLabel: "Average at that time",
+      overlay: todayOverlay(stats.time_of_day, stats),
+      overlayLabel: "Today",
+      projectedLabel: "Today, projected",
       emptyMessage: "No samples yet.",
     }
   );

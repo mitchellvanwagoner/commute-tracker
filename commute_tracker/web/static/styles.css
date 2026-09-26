@@ -12,6 +12,7 @@
   --border:         rgba(11, 11, 11, 0.10);
   --series-1:       #2a78d6;
   --series-1-wash:  rgba(42, 120, 214, 0.10);
+  --series-2:       #eb6834;
   --critical:       #d03b3b;
   /* Status colors are fixed rather than themed: these steps clear 3:1 on both
      the light and the dark surface, so they need no per-theme variant. */
@@ -32,6 +33,7 @@
     --border:         rgba(255, 255, 255, 0.10);
     --series-1:       #3987e5;
     --series-1-wash:  rgba(57, 135, 229, 0.14);
+    --series-2:       #d95926;
     --critical:       #e66767;
   }
 }
@@ -48,6 +50,7 @@
   --border:         rgba(255, 255, 255, 0.10);
   --series-1:       #3987e5;
   --series-1-wash:  rgba(57, 135, 229, 0.14);
+  --series-2:       #d95926;
   --critical:       #e66767;
 }
 
@@ -137,6 +140,7 @@ select, .button {
 .legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .legend-key { width: 14px; height: 10px; border-radius: 2px; flex: none; }
 .legend-key.line { height: 2px; border-radius: 1px; }
+.legend-key.dashed { height: 2px; border-radius: 0; }
 
 .empty { color: var(--text-muted); font-size: 13px; padding: 24px 0; text-align: center; }
 

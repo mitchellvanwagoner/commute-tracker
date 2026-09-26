@@ -80,8 +80,12 @@ const Charts = (() => {
       const node = document.createElement("span");
       node.className = "legend-item";
       const key = document.createElement("span");
-      key.className = `legend-key${item.type === "line" ? " line" : ""}`;
-      key.style.background = item.color;
+      key.className = `legend-key${item.type ? ` ${item.type === "dashed" ? "line dashed" : "line"}` : ""}`;
+      if (item.type === "dashed") {
+        key.style.backgroundImage = `repeating-linear-gradient(90deg, ${item.color} 0 4px, transparent 4px 7px)`;
+      } else {
+        key.style.background = item.color;
+      }
       node.append(key, document.createTextNode(item.label));
       wrap.append(node);
     }
@@ -152,6 +156,10 @@ const Charts = (() => {
    * Shaded band with an average line.
    * rows: [{ label, lo, hi, avg, min, max, ...extra }]
    *
+   * `overlay`, if given, is a second line drawn over the first: one entry per
+   * row, `{ value, measured }` or null for a gap. Measured points are solid with
+   * markers; the unmeasured ones are a dashed projection continuing from them.
+   *
    * `lo`/`hi` are what gets shaded -- the quartiles, so the shape reads as the
    * typical range rather than being stretched by one freak trip. `min`/`max`
    * are the outright extremes: reported in the tooltip, deliberately not drawn.
@@ -164,13 +172,19 @@ const Charts = (() => {
       bandLabel = "Middle half of trips",
       lineLabel = "Average",
       emptyMessage = "No samples yet.",
+      overlay = null,
+      overlayLabel = "Today",
+      projectedLabel = "Projected",
     } = options;
 
     container.innerHTML = "";
     if (!rows.length) return emptyState(container, emptyMessage);
+    const hasOverlay = Boolean(overlay?.some((point) => point));
+    const hasProjection = Boolean(overlay?.some((point) => point && !point.measured));
 
     const colors = {
       series: cssVar(container, "--series-1"),
+      overlay: cssVar(container, "--series-2"),
       wash: cssVar(container, "--series-1-wash"),
       grid: cssVar(container, "--grid"),
       axis: cssVar(container, "--axis"),
@@ -182,6 +196,8 @@ const Charts = (() => {
       legend([
         { label: bandLabel, color: colors.wash },
         { label: lineLabel, color: colors.series, type: "line" },
+        ...(hasOverlay ? [{ label: overlayLabel, color: colors.overlay, type: "line" }] : []),
+        ...(hasProjection ? [{ label: projectedLabel, color: colors.overlay, type: "dashed" }] : []),
       ])
     );
 
@@ -193,9 +209,10 @@ const Charts = (() => {
     // outliers out of the band would leave the plot zoomed out around them
     // anyway. The average is included because a skewed day can push it outside
     // its own quartiles, and a clipped line would be worse than a taller axis.
+    const overlayValues = hasOverlay ? overlay.filter(Boolean).map((p) => p.value) : [];
     const scale = niceScale(
-      Math.min(...rows.map((r) => Math.min(r.lo, r.avg))),
-      Math.max(...rows.map((r) => Math.max(r.hi, r.avg)))
+      Math.min(...rows.map((r) => Math.min(r.lo, r.avg)), ...overlayValues),
+      Math.max(...rows.map((r) => Math.max(r.hi, r.avg)), ...overlayValues)
     );
     const xAt = (index) =>
       rows.length === 1
@@ -248,6 +265,8 @@ const Charts = (() => {
       });
     }
 
+    if (hasOverlay) drawOverlay(svg, overlay, xAt, yAt, colors);
+
     xLabels(svg, geo, margin, rows.map((r) => r.label), xAt, colors);
 
     // Hover layer: crosshair + emphasized marker on the nearest column.
@@ -267,14 +286,14 @@ const Charts = (() => {
     });
     svg.append(crosshair, focus);
 
-    const overlay = el("rect", {
+    const hitArea = el("rect", {
       x: margin.left,
       y: margin.top,
       width: innerW,
       height: innerH,
       fill: "transparent",
     });
-    overlay.style.cursor = "crosshair";
+    hitArea.style.cursor = "crosshair";
     const nearest = (event) => {
       const box = svg.getBoundingClientRect();
       const scaleX = geo.width / box.width;
@@ -282,7 +301,7 @@ const Charts = (() => {
       const ratio = rows.length === 1 ? 0 : (x - margin.left) / innerW;
       return Math.max(0, Math.min(rows.length - 1, Math.round(ratio * (rows.length - 1))));
     };
-    overlay.addEventListener("mousemove", (event) => {
+    hitArea.addEventListener("mousemove", (event) => {
       const index = nearest(event);
       const row = rows[index];
       crosshair.setAttribute("x1", xAt(index));
@@ -297,16 +316,61 @@ const Charts = (() => {
           `<div class="t-row">Average <b>${formatValue(row.avg)} ${unit}</b></div>` +
           `<div class="t-row">Middle half <b>${formatValue(row.lo)}</b> &ndash; <b>${formatValue(row.hi)}</b></div>` +
           `<div class="t-row">Fastest <b>${formatValue(row.min)}</b> &middot; Slowest <b>${formatValue(row.max)}</b></div>` +
-          `<div class="t-row">${row.samples ?? 0} sample${row.samples === 1 ? "" : "s"}</div>`
+          `<div class="t-row">${row.samples ?? 0} sample${row.samples === 1 ? "" : "s"}</div>` +
+          overlayRow(overlay?.[index], formatValue, unit)
       );
     });
-    overlay.addEventListener("mouseleave", () => {
+    hitArea.addEventListener("mouseleave", () => {
       crosshair.setAttribute("opacity", 0);
       focus.setAttribute("opacity", 0);
       hideTooltip();
     });
-    svg.append(overlay);
+    svg.append(hitArea);
     container.append(svg);
+  }
+
+  /**
+   * Today's line: solid through what was measured, dashed through the
+   * projection, the dashes starting from the last measured point so the two
+   * read as one line.
+   */
+  function drawOverlay(svg, points, xAt, yAt, colors) {
+    const path = (indexes) =>
+      indexes.map((i, n) => `${n === 0 ? "M" : "L"}${xAt(i)},${yAt(points[i].value)}`).join("");
+    const present = points.map((p, i) => (p ? i : null)).filter((i) => i !== null);
+    const measured = present.filter((i) => points[i].measured);
+    const lastMeasured = measured[measured.length - 1];
+    const projected = present.filter((i) => !points[i].measured && (lastMeasured === undefined || i > lastMeasured));
+    const stroke = {
+      fill: "none",
+      stroke: colors.overlay,
+      "stroke-width": 2,
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    };
+    if (projected.length) {
+      const from = lastMeasured === undefined ? projected : [lastMeasured, ...projected];
+      svg.append(el("path", { ...stroke, d: path(from), "stroke-dasharray": "5 4" }));
+    }
+    if (measured.length > 1) svg.append(el("path", { ...stroke, d: path(measured) }));
+    for (const i of measured) {
+      svg.append(
+        el("circle", {
+          cx: xAt(i),
+          cy: yAt(points[i].value),
+          r: 4,
+          fill: colors.overlay,
+          stroke: colors.surface,
+          "stroke-width": 2,
+        })
+      );
+    }
+  }
+
+  function overlayRow(point, formatValue, unit) {
+    if (!point) return "";
+    const label = point.measured ? "Today" : "Today, projected";
+    return `<div class="t-row">${label} <b>${formatValue(point.value)} ${unit}</b></div>`;
   }
 
   /** Column chart with a rounded cap; rows: [{ label, value, ...extra }] */

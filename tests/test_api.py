@@ -157,3 +157,10 @@ def test_routes_endpoint_explains_the_parse_error(broken_client):
 
 def test_the_dashboard_shell_still_loads(broken_client):
     assert broken_client.get("/").status_code == 200
+
+
+def test_stats_carries_todays_samples_for_the_overlay(client):
+    """Only today's samples: the fixture's are from January, so there are none."""
+    stats = client.get("/api/stats").json()
+    assert stats["today"] == []
+    assert stats["report"]["projection"] == []

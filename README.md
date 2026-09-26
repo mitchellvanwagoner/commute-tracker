@@ -201,6 +201,15 @@ measured in standard deviations rather than a flat percentage — so a route tha
 swings by ten minutes either way as a matter of course does not cry wolf, while a
 normally metronomic route flags a smaller slip.
 
+While the window is still running, the day is judged on where it is heading
+rather than its average so far (which, holding only the early fast trips, would
+always read light). A quartic is fitted to the usual duration at each clock
+time, scaled to best match today's samples, and read off at the times still to
+come. A day at 1.2× the usual curve is also climbing 1.2× as steeply, so a
+morning getting worse faster than normal projects a widening gap. The dashboard
+draws today over the time-of-day chart, solid where measured and dashed where
+projected.
+
 | Color | Meaning | Rule |
 | --- | --- | --- |
 | 🔴 red | Busier than normal | more than +1σ above the baseline |
